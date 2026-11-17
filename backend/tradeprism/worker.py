@@ -1,0 +1,52 @@
+import json
+import time
+from sqlalchemy import select, update
+from .db import Job, session, init, now
+from .service import ingest, bars, metadata, append, advance_paper
+from .quant import features
+from .ml import train
+
+def run_one():
+    with session() as s:
+        job=s.scalar(select(Job).where(Job.status=='queued').order_by(Job.created).limit(1))
+        if not job: return False
+        claimed=s.execute(update(Job).where(Job.id==job.id,Job.status=='queued').values(status='running',updated=now(),detail='Worker running')).rowcount
+        if not claimed: return False
+        jid,kind,symbol,tf=job.id,job.kind,job.symbol,job.timeframe
+    try:
+        if kind=='ingest':
+            result=ingest(symbol,tf)
+            detail=f"Stored {result['count']} genuine completed candles from {result['source']}"
+        elif kind=='train':
+            meta=metadata(symbol,tf)
+            if not meta: raise ValueError('Market data unavailable; fetch genuine history first.')
+            if meta.get('missing_intervals'): raise ValueError('Historical gaps must be reconciled before training.')
+            if meta['asset']=='equity': raise ValueError('Equity training blocked until corporate-action consistency is verified.')
+            result=train(features(bars(symbol,tf)),symbol,tf,meta['tick'],meta)
+            with session() as s:
+                from .db import Record
+                if not s.get(Record,result['version']): append(s,'model','system',symbol,result,result['version'])
+            detail=f"Saved research model {result['version']} with held-out evaluation"
+        else: raise ValueError('Unknown job kind')
+        advance_paper()
+        status='completed'
+    except (ValueError,KeyError,TypeError) as e:
+        detail=str(e)[:600]; status='failed'
+    except Exception:
+        detail='Worker failed; inspect local service logs. No fabricated result was produced.'; status='failed'
+        import traceback
+        traceback.print_exc()
+    with session() as s:
+        job=s.get(Job,jid); job.status=status; job.detail=detail; job.updated=now()
+    return True
+
+def main():
+    init()
+    # One worker per deployment. Interrupted jobs are explicitly failed, never silently retried.
+    with session() as s:
+        for job in s.scalars(select(Job).where(Job.status=='running')):
+            job.status='failed'; job.detail='Worker interrupted. Requeue after inspecting the previous run.'; job.updated=now()
+    while True:
+        if not run_one(): time.sleep(2)
+
+if __name__=='__main__': main()
