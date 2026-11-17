@@ -17,12 +17,14 @@ def run_one():
         if kind=='ingest':
             result=ingest(symbol,tf)
             detail=f"Stored {result['count']} genuine completed candles from {result['source']}"
-        elif kind=='train':
+        elif kind in ('train','prepare'):
+            if kind=='prepare': ingest(symbol,tf,10000)
             meta=metadata(symbol,tf)
             if not meta: raise ValueError('Market data unavailable; fetch genuine history first.')
             if meta.get('missing_intervals'): raise ValueError('Historical gaps must be reconciled before training.')
-            if meta['asset']=='equity': raise ValueError('Equity training blocked until corporate-action consistency is verified.')
-            result=train(features(bars(symbol,tf)),symbol,tf,meta['tick'],meta)
+            from .training import research_frame
+            frame=research_frame(bars(symbol,tf),meta,tf)
+            result=train(features(frame),symbol,tf,meta['tick'],meta)
             with session() as s:
                 from .db import Record
                 if not s.get(Record,result['version']): append(s,'model','system',symbol,result,result['version'])

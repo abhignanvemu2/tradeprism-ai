@@ -22,8 +22,10 @@ def main():
     else:
         meta=metadata(args.symbol,args.timeframe)
         if not meta: parser.error('Fetch genuine history first')
-        if meta.get('missing_intervals') or meta['asset']=='equity': parser.error('Reconcile gaps/corporate actions before training')
-        result=train(features(bars(args.symbol,args.timeframe)),args.symbol,args.timeframe,meta['tick'],meta)
+        if meta.get('missing_intervals'): parser.error('Reconcile gaps/corporate actions before training')
+        from .training import research_frame
+        frame=research_frame(bars(args.symbol,args.timeframe),meta,args.timeframe)
+        result=train(features(frame),args.symbol,args.timeframe,meta['tick'],meta)
         with session() as s:
             if not s.get(Record,result['version']): append(s,'model','system',args.symbol,result,result['version'])
     print(json.dumps(result,indent=2,allow_nan=False))

@@ -36,6 +36,8 @@ def ingest(symbol, tf, count=1800):
         for t,o,h,l,c,v in rows:
             if t in existing:
                 old=existing[t]
+                if old.source!=meta['source']:
+                    raise ValueError('Existing history uses another provider. Use a new DATA_DIR; histories cannot be mixed.')
                 # Do not silently rewrite research history after provider corrections.
                 if [old.open,old.high,old.low,old.close,old.volume]!=[o,h,l,c,v]:
                     raise ValueError('Provider historical revision detected; ingestion rejected. Reconcile adjusted prices before training.')

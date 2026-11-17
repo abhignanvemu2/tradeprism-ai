@@ -8,3 +8,4 @@ joblib==1.5.3
 SQLAlchemy==2.1.9
 psycopg[binary]==3.3.9
 pytest==9.2.0
+tzdata>=2025.1

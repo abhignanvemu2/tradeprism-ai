@@ -48,9 +48,11 @@ def test_job_deduplication():
     b=client.post('/jobs',headers=ALICE,json=payload).json()
     assert a['id']==b['id']
 
-def test_missing_llm_is_not_canned_ai():
+def test_local_explanation_reports_missing_evidence():
     r=client.post('/explain',headers=ALICE,json={'symbol':'BTC-USD','question':'Explain'})
-    assert r.status_code==503
+    assert r.status_code==200
+    assert r.json()['engine']=='deterministic-local-v1'
+    assert 'unavailable' in r.json()['summary'].lower()
 
 def add_candle(s,t,o=99,h=101,l=98,c=100):
     s.add(Candle(symbol='BTC-USD',timeframe='1h',time=t,open=o,high=h,low=l,close=c,volume=100,source='isolated_test_fixture',fetched_at=now()))

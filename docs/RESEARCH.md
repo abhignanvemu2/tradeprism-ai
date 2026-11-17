@@ -1,3 +1,5 @@
+> **v0.2 update:** See the root README for current setup. Indian stocks now use Upstox; local explanations replace the LLM endpoint. Windows startup and root .env loading are implemented. Intraday equity research training is permitted with session/gap and discontinuity guards, but corporate-action reconciliation remains unverified. Upstox authentication, real-data training and browser interactions still need end-to-end verification. Older v0.1 descriptions below are retained as historical scope context.
+
 # Research protocol v1
 
 This is a research protocol implemented in `quant.py` and `ml.py`, not evidence of actual market performance.

@@ -5,7 +5,7 @@ import pandas as pd
 
 FEATURES = ['return1','return5','return20','volatility','rsi','ema_distance','atr_fraction','volume_ratio','breakout_distance']
 HORIZON = 12
-VERSION = 'long-breakout-v1'
+VERSION = 'long-breakout-v2-session-purged'
 
 def features(frame):
     d = frame.copy()
@@ -67,6 +67,10 @@ def dataset(d, tick):
     examples, unfilled = [], 0
     for i in range(50,len(d)-HORIZON):
         row = d.iloc[i]
+        if 'session' in d.columns:
+            window=d.iloc[i:i+1+HORIZON]
+            if window.session.nunique()!=1 or (window.time.diff().dropna()!=d.attrs.get('step')).any():
+                continue
         if row[FEATURES].isna().any() or row.atr <= 0:
             continue
         p = plan(row,tick)

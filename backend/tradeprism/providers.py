@@ -10,9 +10,9 @@ import numpy as np
 
 SECONDS = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400}
 REGISTRY = {
-    'AXISBANK': {'provider': 'kite', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
-    'HDFCBANK': {'provider': 'kite', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
-    'ICICIBANK': {'provider': 'kite', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
+    'AXISBANK': {'provider': 'upstox', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
+    'HDFCBANK': {'provider': 'upstox', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
+    'ICICIBANK': {'provider': 'upstox', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
     'BTC-USD': {'provider': 'coinbase', 'venue': 'Coinbase Exchange', 'asset': 'crypto spot', 'currency': 'USD', 'zone': 'UTC'},
     'ETH-USD': {'provider': 'coinbase', 'venue': 'Coinbase Exchange', 'asset': 'crypto spot', 'currency': 'USD', 'zone': 'UTC'},
     'EUR_USD': {'provider': 'oanda', 'venue': 'OANDA', 'asset': 'forex', 'currency': 'USD', 'zone': 'America/New_York'},
@@ -66,6 +66,9 @@ def fetch(symbol, tf, count=1800):
     step = SECONDS[tf]
     end = int(time.time() // step * step)
     rows = []
+    if meta['provider'] == 'upstox':
+        from .upstox import fetch_upstox
+        return fetch_upstox(symbol, tf, count, request, validate)
     if meta['provider'] == 'coinbase':
         root = 'https://api.exchange.coinbase.com'
         product = request(f'{root}/products/{symbol}')
