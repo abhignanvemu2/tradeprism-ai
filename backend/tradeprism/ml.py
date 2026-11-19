@@ -25,7 +25,7 @@ def stats(rows):
     selected=[]; busy_until=-1
     for r in rows:
         if r['index']<=busy_until: continue
-        selected.append(r); busy_until=r['index']+r['bars']
+        selected.append(r); busy_until=r['index']+r.get('entry_delay',0)+r['bars']
     returns=np.array([r['net_return'] for r in selected])
     n=len(returns)
     if not n: return {'trades':0,'win_rate':None,'win_rate_95ci':None,'net_expectancy':None}
@@ -67,7 +67,7 @@ def train(frame, symbol, tf, tick, provenance):
     for low in np.arange(0,1,.1):
         mask=(probabilities>=low)&(probabilities<low+.1)
         if mask.any(): bins.append({'low':float(low),'count':int(mask.sum()),'predicted':float(probabilities[mask].mean()),'observed':float(ye[mask].mean())})
-    report={'version':version,'strategy':VERSION,'features':FEATURES,'data_hash':digest,'trained_at':now(),'symbol':symbol,'timeframe':tf,'model':winner,'python':platform.python_version(),'sklearn':sklearn.__version__,'target':'TP at 3 ATR before SL at 1.5 ATR within 12 bars, conditional on next-bar stop-entry fill; expiry is failure. Gap above entry is unfilled. Long only.','threshold':.60,'cost_bps_per_side':15,'split':'55% training / 15% model selection / 15% sigmoid calibration / 15% final test; purge full 12-bar label horizon at each boundary','partition_counts':[len(p) for p in parts],'partition_dates':[[p[0]['time'],p[-1]['time']] for p in parts],'unfilled_examples':unfilled,'validation_brier':scores,'test_brier':float(brier_score_loss(ye,probabilities)),'baseline_test_brier':float(brier_score_loss(ye,np.repeat(yt.mean(),len(ye)))),'test_log_loss':float(log_loss(ye,probabilities)),'calibration':bins,'selected_test':metrics,'baseline_all_setups':stats(parts[3]),'provenance':provenance,'status':'research only','limitations':['Not walk-forward validated; final holdout is single-run per dataset hash.','Changing the dataset can overlap previous final test periods: no independence claim across retrains.','No spread history, queue position, funding, borrow or corporate-action reconciliation.','No point-in-time market universe; single-instrument evaluation.','Probability is conditional on the documented entry and fixed barriers; manual edits invalidate it.','Live execution alignment and drift validation are pending; no actionable AI recommendations.']}
+    report={'version':version,'strategy':VERSION,'features':FEATURES,'data_hash':digest,'trained_at':now(),'symbol':symbol,'timeframe':tf,'model':winner,'python':platform.python_version(),'sklearn':sklearn.__version__,'target':'TP at 3 ATR before SL at 1.5 ATR within 12 bars, conditional on stop-entry fill after one waiting bar; expiry is failure. Gap above entry is unfilled. Long only.','threshold':.60,'cost_bps_per_side':15,'split':'55% training / 15% model selection / 15% sigmoid calibration / 15% final test; purge full 13-bar observation-to-outcome horizon at each boundary','partition_counts':[len(p) for p in parts],'partition_dates':[[p[0]['time'],p[-1]['time']] for p in parts],'unfilled_examples':unfilled,'validation_brier':scores,'test_brier':float(brier_score_loss(ye,probabilities)),'baseline_test_brier':float(brier_score_loss(ye,np.repeat(yt.mean(),len(ye)))),'test_log_loss':float(log_loss(ye,probabilities)),'calibration':bins,'selected_test':metrics,'baseline_all_setups':stats(parts[3]),'provenance':provenance,'status':'research only','limitations':['Not walk-forward validated; final holdout is single-run per dataset hash.','Changing the dataset can overlap previous final test periods: no independence claim across retrains.','No spread history, queue position, funding, borrow or corporate-action reconciliation.','No point-in-time market universe; single-instrument evaluation.','Probability is conditional on the documented entry and fixed barriers; manual edits invalidate it.','Live execution alignment and drift validation are pending; no actionable AI recommendations.']}
     folder.mkdir(parents=True,exist_ok=True)
     temp=folder/'model.tmp'
     joblib.dump({'model':model,'calibrator':calibrator,'report':report},temp)
@@ -76,6 +76,8 @@ def train(frame, symbol, tf, tick, provenance):
     return report
 
 def infer(frame, report):
+    if report.get('strategy')!=VERSION:
+        return {'state':'Model strategy changed; automatic retraining required','probability':None}
     if now()-report['trained_at']>30*86400:
         return {'state':'Model expired; retraining and validation required','probability':None}
     x=frame.iloc[-1][FEATURES].to_numpy(dtype=float)

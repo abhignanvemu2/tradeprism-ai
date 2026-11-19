@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, Column, String, Float, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATA = Path(os.getenv('DATA_DIR', 'data')).resolve()
+_backend=Path(__file__).resolve().parents[1]
+_configured=Path(os.getenv('DATA_DIR','data'))
+DATA = (_configured if _configured.is_absolute() else _backend/_configured).resolve()
 DATA.mkdir(parents=True, exist_ok=True)
 url = os.getenv('DATABASE_URL', f'sqlite:///{DATA}/tradeprism.db')
 engine = create_engine(url, connect_args={'check_same_thread': False, 'timeout': 30} if url.startswith('sqlite') else {}, pool_pre_ping=True)
@@ -86,17 +88,52 @@ class ResearchState(Base):
     detail = Column(Text, nullable=False, default='Waiting for historical data')
     analysis = Column(Text, nullable=False, default='{}')
 
+class ChartTrack(Base):
+    __tablename__ = 'chart_tracks'
+    key = Column(String(64), primary_key=True)
+    symbol = Column(String(40), nullable=False, index=True)
+    timeframe = Column(String(8), nullable=False)
+    next_fetch = Column(Float, nullable=False, default=0, index=True)
+    last_bar = Column(Float, nullable=False, default=0)
+    attempted_bar = Column(Float, nullable=False, default=0)
+    trained_bar = Column(Float, nullable=False, default=0)
+    analysis = Column(Text, nullable=False, default='{}')
+    detail = Column(Text, nullable=False, default='Waiting for chart history')
+
+class Forecast(Base):
+    __tablename__ = 'forecasts'
+    id = Column(String(64), primary_key=True)
+    symbol = Column(String(40), nullable=False, index=True)
+    timeframe = Column(String(8), nullable=False)
+    created = Column(Float, nullable=False, index=True)
+    entry_time = Column(Float, nullable=False)
+    end_time = Column(Float, nullable=False)
+    probability = Column(Float, nullable=False)
+    qualified = Column(Integer, nullable=False)
+    body = Column(Text, nullable=False)
+
+class ForecastResult(Base):
+    __tablename__ = 'forecast_results'
+    id = Column(String(64), primary_key=True)
+    resolved_at = Column(Float, nullable=False)
+    event_time = Column(Float, nullable=False, index=True)
+    event = Column(String(30), nullable=False)
+    net_return = Column(Float)
+    body = Column(Text, nullable=False)
+
 def init():
     Base.metadata.create_all(engine)
     # Database-level immutability also prevents accidental code-path rewrites.
     with engine.begin() as c:
         if engine.dialect.name == 'sqlite':
-            for op in ('UPDATE', 'DELETE'):
-                c.exec_driver_sql(f"CREATE TRIGGER IF NOT EXISTS records_no_{op.lower()} BEFORE {op} ON records BEGIN SELECT RAISE(ABORT, 'Records are immutable'); END")
+            for table in ('records','forecasts','forecast_results'):
+                for op in ('UPDATE', 'DELETE'):
+                    c.exec_driver_sql(f"CREATE TRIGGER IF NOT EXISTS {table}_no_{op.lower()} BEFORE {op} ON {table} BEGIN SELECT RAISE(ABORT, 'Evidence is immutable'); END")
         elif engine.dialect.name == 'postgresql':
             c.exec_driver_sql("CREATE OR REPLACE FUNCTION reject_record_change() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'Records are immutable'; END; $$")
-            c.exec_driver_sql('DROP TRIGGER IF EXISTS records_immutable ON records')
-            c.exec_driver_sql('CREATE TRIGGER records_immutable BEFORE UPDATE OR DELETE ON records FOR EACH ROW EXECUTE FUNCTION reject_record_change()')
+            for table in ('records','forecasts','forecast_results'):
+                c.exec_driver_sql(f'DROP TRIGGER IF EXISTS {table}_immutable ON {table}')
+                c.exec_driver_sql(f'CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION reject_record_change()')
 
 @contextmanager
 def session():

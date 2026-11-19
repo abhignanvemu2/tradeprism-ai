@@ -90,9 +90,46 @@ def snapshot(symbol:str,timeframe:str='1h',owner=Depends(auth)):
     with session() as s: identifier=append(s,'signal',owner,symbol,result)
     return {'id':identifier,**result}
 
+class Focus(BaseModel):
+    symbol: str
+    timeframe: str='15m'
+
+@app.post('/focus')
+def focus(p:Focus,owner=Depends(auth)):
+    valid(p.symbol,p.timeframe)
+    from .db import ResearchState, ChartTrack
+    with session() as s:
+        if p.timeframe=='15m':
+            row=s.get(ResearchState,p.symbol)
+            if row: row.next_fetch=-now()
+        else:
+            row=s.get(ChartTrack,f'{p.symbol}:{p.timeframe}')
+            if row: row.next_fetch=-now()
+    return {'state':'Selected chart prioritized; universe collection remains automatic'}
+
+@app.get('/dashboard')
+def dashboard(owner=Depends(auth)):
+    from .forward import dashboard as summary
+    return summary()
+
+@app.get('/forecasts')
+def forecast_history(offset:int=Query(0,ge=0),limit:int=Query(100,ge=1,le=200),symbol:str|None=None,owner=Depends(auth)):
+    from .db import Forecast, ForecastResult
+    with session() as s:
+        query=select(Forecast,ForecastResult).outerjoin(ForecastResult,ForecastResult.id==Forecast.id)
+        if symbol: query=query.where(Forecast.symbol==symbol)
+        rows=s.execute(query.order_by(Forecast.created.desc(),Forecast.id).offset(offset).limit(limit)).all()
+        count=select(func.count()).select_from(Forecast)
+        if symbol: count=count.where(Forecast.symbol==symbol)
+        total=s.scalar(count)
+        return {'total':total,'offset':offset,'limit':limit,'records':[{'id':f.id,'symbol':f.symbol,'timeframe':f.timeframe,
+            'issued_at':f.created,'entry_time':f.entry_time,'end_time':f.end_time,'probability':f.probability,
+            'qualified':bool(f.qualified),'forecast':json.loads(f.body),'outcome':json.loads(r.body) if r else None,
+            'net_return':r.net_return if r else None} for f,r in rows]}
+
 @app.get('/monitor')
 def monitor(owner=Depends(auth)):
-    from .db import Instrument, ResearchState, LiveQuote
+    from .db import Instrument, ResearchState, LiveQuote, ChartTrack
     from .universe import status
     with session() as s:
         total=s.scalar(select(func.count()).select_from(Instrument))
@@ -100,10 +137,15 @@ def monitor(owner=Depends(auth)):
         trained=s.scalar(select(func.count()).select_from(ResearchState).join(Instrument,Instrument.symbol==ResearchState.symbol).where(ResearchState.trained_bar>0))
         fresh=s.scalar(select(func.count()).select_from(LiveQuote).join(Instrument,Instrument.symbol==LiveQuote.symbol).where(LiveQuote.received>now()-30,LiveQuote.trade_time>now()-60))
         pending=s.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['queued','running'])))
-    return {'universe':total,'histories':collected,'auto_trained':trained,'recent_trades':fresh,'pending_jobs':pending,
+        coverage=[{'timeframe':'15m','histories':collected,'trained':trained}]
+        for tf in ('1m','5m','1h','1d'):
+            histories=s.scalar(select(func.count()).select_from(ChartTrack).join(Instrument,Instrument.symbol==ChartTrack.symbol).where(ChartTrack.timeframe==tf,ChartTrack.last_bar>0))
+            models=s.scalar(select(func.count()).select_from(ChartTrack).join(Instrument,Instrument.symbol==ChartTrack.symbol).where(ChartTrack.timeframe==tf,ChartTrack.trained_bar>0))
+            coverage.append({'timeframe':tf,'histories':histories,'trained':models})
+    return {'coverage':coverage,'universe':total,'histories':sum(x['histories'] for x in coverage),'auto_trained':sum(x['trained'] for x in coverage),'recent_trades':fresh,'pending_jobs':pending,
         'feed':status('feed'),'collector':status('collector'),'discovery':status('universe'),
-        'timeframe':'15m','training':'Automatic batch retraining after new completed outcomes; not tick-by-tick learning',
-        'coverage':'All discovered NSE/BSE EQ histories queued. Streaming rotates above 5000; not simultaneous full-market chart analysis.'}
+        'timeframes':['1m','5m','15m','1h','1d'],'training':'Automatic 1m/5m/15m batch retraining after new completed outcomes; not tick-by-tick learning',
+        'coverage_note':'All discovered NSE/BSE EQ histories queued. Streaming rotates above 5000; not simultaneous full-market chart analysis.'}
 
 @app.get('/quotes/{symbol}')
 def quote(symbol:str,owner=Depends(auth)):

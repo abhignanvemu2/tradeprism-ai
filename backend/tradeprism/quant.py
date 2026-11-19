@@ -5,7 +5,8 @@ import pandas as pd
 
 FEATURES = ['return1','return5','return20','volatility','rsi','ema_distance','atr_fraction','volume_ratio','breakout_distance']
 HORIZON = 12
-VERSION = 'long-breakout-v2-session-purged'
+ENTRY_DELAY = 1  # allow completion/polling before the first full future entry bar
+VERSION = 'long-breakout-v3-future-entry'
 
 def features(frame):
     d = frame.copy()
@@ -65,10 +66,10 @@ def outcome(bars, p, cost_bps=15):
 
 def dataset(d, tick):
     examples, unfilled = [], 0
-    for i in range(50,len(d)-HORIZON):
+    for i in range(50,len(d)-HORIZON-ENTRY_DELAY):
         row = d.iloc[i]
         if 'session' in d.columns:
-            window=d.iloc[i:i+1+HORIZON]
+            window=d.iloc[i:i+1+HORIZON+ENTRY_DELAY]
             if window.session.nunique()!=1 or (window.time.diff().dropna()!=d.attrs.get('step')).any():
                 continue
         if row[FEATURES].isna().any() or row.atr <= 0:
@@ -76,11 +77,11 @@ def dataset(d, tick):
         p = plan(row,tick)
         if p['stop']<=0 or not p['stop']<p['entry']<p['target']:
             continue
-        out = outcome(d.iloc[i+1:i+1+HORIZON],p)
+        out = outcome(d.iloc[i+1+ENTRY_DELAY:i+1+ENTRY_DELAY+HORIZON],p)
         if out is None:
             unfilled += 1
             continue
-        examples.append({'index':i,'time':float(row.time), 'label_end':i+HORIZON, 'x':row[FEATURES].to_numpy(dtype=float), **out})
+        examples.append({'index':i,'time':float(row.time), 'label_end':i+HORIZON+ENTRY_DELAY, 'entry_delay':ENTRY_DELAY, 'x':row[FEATURES].to_numpy(dtype=float), **out})
     return examples, unfilled
 
 def risk(entry, stop, target, direction, equity, risk_pct, tick, lot, cost_bps=15, fx=1, multiplier=1):

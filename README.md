@@ -23,6 +23,21 @@ start.bat
 
 If `.env` does not exist, the launcher creates it with a random app login key. Add the Upstox token and restart. Open http://localhost:3000 and enter the app key from `.env`. Keep the launcher window open; Ctrl+C stops its services. Never commit `.env` or share either token.
 
+## Automatic dashboard and prospective results (v0.4)
+
+Once `start.bat` is running with a working Upstox token, **Dashboard** refreshes automatically. You do not have to click Fetch or Train for each stock. Opening a chart gives it collection priority; the discovered NSE/BSE universe keeps progressing in the background.
+
+- The collection queue now covers **1m, 5m, 15m, 1h and daily** charts. Automatic model fitting covers **1m, 5m and 15m**. Hourly/daily swing models, additional strategy families, derivatives and all possible chart styles are not implemented.
+- Ranked candidates must have a fresh compatible model, at least 30 selected holdout trades, positive holdout mean net return after assumed costs, a Brier score better than the simple baseline, and probability at least the model's threshold. If none qualify, the dashboard says so. Passing these research gates is not production/live-trading validation.
+- Automatic prospective forecasts freeze the model version, probability, entry, stop, target and timestamp **before** the entry window. They use a one-bar waiting period after the observed candle, then a stop entry in the next full bar, with a 12-bar outcome horizon inside the same session. The training labels use exactly this timing. The version change triggers automatic retraining; old-model inference is blocked.
+- The system records forecasts even when they fail the candidate quality gate, to expose poor results rather than hide them. The dashboard identifies the qualifying subset separately. Forecasts never place real orders.
+- Daily and previous-calendar-week results use **recorded forward paper outcomes**, with IST outcome dates, positive-net-return wins, target-hit rate, losses, pending forecasts, unfilled entries and unverifiable outcomes. Net win rate is not the same quantity as estimated target-hit probability. Fixed 15 bps per side are an assumption, not a verified broker charge schedule.
+- No past live wins are invented on installation. Results accumulate from deployment onward. Existing historical holdout results remain in Models and must not be passed off as prospective results. Daily returns are per-forecast averages, not portfolio profit; correlated stocks/timeframes are not independent samples.
+- Missing expected candles or revisions invalidate a pending forecast's measurement rather than fabricate an outcome. Changed historical data can still require explicit reconciliation; fully unattended operation cannot safely conceal unresolved data conflicts.
+- Every stock/timeframe takes provider requests, CPU and storage. Whole-market backfill can take days. The 5,000-key rotating price stream and slower candle/retraining queues are **not simultaneous tick-level analysis of every chart**. Unsupported stock groups, insufficient evidence and stale coverage remain visible. The app cannot guarantee a win percentage or a profitable “best trade.”
+
+Windows setup now reuses `backend/.venv`, checks backend dependencies, waits for API health before starting the website and reports which process exited. Data defaults to `backend/data` regardless of the terminal's working directory. Run setup only after stopping old app processes.
+
 ## Continuous monitoring and automatic training (v0.3)
 
 In PowerShell, stop the old launcher with Ctrl+C, then:
@@ -38,10 +53,10 @@ Keep your existing `.env`; no extra paid account or AI API key is required. Auto
 - The collector discovers the provider's current **NSE and BSE equity-segment** instrument masters, filtering supported stock groups (BSE does not use NSE's `EQ` type) daily. BSE symbols use `BSE_` to distinguish exchange listings. This is not a point-in-time historical universe and does not cover all security types or guarantee every listed/suspended stock is present.
 - A separate TLS-verified Upstox V3 **LTPC WebSocket** process receives real prices. The UI reads the latest persisted prices every 5 seconds (scanner: 15 seconds). Trade timestamps and stale states remain visible; a connected socket alone does not prove fresh trades.
 - Standard LTPC capacity is **5,000 instrument keys**. Larger universes rotate subscriptions every 5 minutes; overflow instruments are **not streamed simultaneously**. The coverage panel shows the requested subscription count and overflow, not a claim that every instrument sent ticks.
-- The collector downloads up to 10,000 completed **15m** bars per newly discovered symbol, then refreshes existing histories. Initial download of thousands of histories can take many hours or days and substantial disk space. Provider pacing, network speed and laptop capacity determine the actual delay. Existing charts and initial downloads alternate to avoid starving either queue.
+- The collector downloads up to 10,000 completed intraday bars per newly discovered symbol/timeframe, then refreshes existing histories. Initial download of thousands of histories can take many hours or days and substantial disk space. Provider pacing, network speed and laptop capacity determine the actual delay. Existing charts and initial downloads alternate to avoid starving either queue.
 - Training runs automatically in a separate serial worker, with at most 20 pending jobs. At least 12 newly stored completed candles must arrive after the previous attempt before another automatic attempt; elapsed weekends do not count as bars. Labels use only observed completed outcomes; this is **automatic batch retraining, not online learning from every tick**. The same failed dataset is not endlessly retried.
 - A live last-trade price is distinct from a current chart or model. Price-only ticks never fabricate volume or replace verified OHLCV. Charts and model inference update after REST history collection; **full-market chart analysis is not simultaneous or guaranteed real time**.
-- Open **Scanner** to search and page through stocks. Open **Models** to inspect research results. Manual fetch/prepare remains available for selected stocks and other supported timeframes.
+- Open **Dashboard** for recorded forecasts and daily/weekly results, or **Scanner** to search and page through stocks. Open **Models** to inspect research results. Manual fetch/prepare remains available for selected stocks and other supported timeframes.
 - Nonstandard stock groups (including trade-to-trade/SME groups) remain visible, but the current intraday strategy refuses training until their settlement/session rules are supported.
 - Research models remain non-actionable, including automatically trained models. Automatic training does not guarantee improvement; no deployment-quality model promotion or performance guarantee is claimed. Keep the terminal open; closing the browser does not stop collection/training.
 
@@ -77,7 +92,7 @@ npm run build
 
 Official integration references: [Upstox instruments](https://upstox.com/developer/api-documentation/instruments/), [V3 history](https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/), [V3 intraday](https://upstox.com/developer/api-documentation/v3/get-intra-day-candle-data/), [read-only token](https://upstox.com/developer/api-documentation/analytics-token/).
 
-The `docs/` files retain the detailed original research protocol and scope tracker; this v0.3 README supersedes older integration and coverage descriptions. Optional Docker files remain for users who prefer containers, but are not necessary for this workflow. Lightweight Charts attribution remains enabled.
+The `docs/` files retain the detailed original research protocol and scope tracker; this v0.4 README supersedes older integration and coverage descriptions. Optional Docker files remain for users who prefer containers, but are not necessary for this workflow. Lightweight Charts attribution remains enabled.
 
 Feed limits: https://upstox.com/developer/api-documentation/v3/get-market-data-feed/
 REST quotas: https://upstox.com/developer/api-documentation/rate-limiting/

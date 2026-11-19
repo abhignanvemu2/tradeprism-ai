@@ -98,7 +98,7 @@ def analyze(symbol,tf,until=None):
     elif models:
         result['model']=models[0]
         result['prediction']=infer(f,models[0])
-        result['decision']='WATCH' if not stale else 'NO TRADE'
+        result['decision']='WATCH' if not stale and result['prediction'].get('probability') is not None else 'NO TRADE'
     else:
         result['reasons'].append('Predictive model not trained.')
     return result

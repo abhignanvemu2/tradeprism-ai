@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 ROOT=Path(__file__).resolve().parent
 
@@ -36,14 +37,31 @@ def main():
     # Limit CPU contention so training does not monopolize the live-feed process.
     os.environ.setdefault('OMP_NUM_THREADS','2')
     os.environ.setdefault('MKL_NUM_THREADS','2')
-    subprocess.run([sys.executable,'-c','from tradeprism.db import init; init()'],cwd=ROOT/'backend',check=True)
+    check=subprocess.run([sys.executable,'-c','import uvicorn, websocket; from tradeprism.proto.MarketDataFeed_pb2 import FeedResponse; from tradeprism.db import init; init()'],cwd=ROOT/'backend')
+    if check.returncode:
+        raise SystemExit('Backend dependency/database check failed. Stop the app, run setup.bat, and inspect the error above.')
     commands=[([sys.executable,'-m','uvicorn','tradeprism.api:app','--host','127.0.0.1','--port','8000'],ROOT/'backend'),([sys.executable,'-m','tradeprism.worker'],ROOT/'backend'),([sys.executable,'-m','tradeprism.continuous'],ROOT/'backend'),([sys.executable,'-m','tradeprism.live'],ROOT/'backend'),([node,str(nextjs),'dev','--hostname','127.0.0.1','--port','3000'],ROOT/'frontend')]
     processes=[]
     try:
-        for command,cwd in commands:processes.append(subprocess.Popen(command,cwd=cwd))
+        for index,(command,cwd) in enumerate(commands):
+            processes.append(subprocess.Popen(command,cwd=cwd))
+            if index==0:
+                deadline=time.monotonic()+60
+                healthy=False
+                while time.monotonic()<deadline and processes[0].poll() is None:
+                    try:
+                        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8000/health',timeout=2) as response:
+                            healthy=response.status==200
+                        if healthy: break
+                    except OSError: pass
+                    time.sleep(.5)
+                if not healthy: raise RuntimeError('API did not become healthy. Inspect its traceback above; other services were not started.')
         print('Starting TradePrism at http://localhost:3000 . Keep this window open. Ctrl+C stops all services.')
         while all(p.poll() is None for p in processes):time.sleep(1)
-        print('A service exited. Stopping the other services; inspect the errors above.')
+        names=['API','training worker','collector','live feed','website']
+        for name,process in zip(names,processes):
+            if process.poll() is not None: print(f'{name} exited with code {process.returncode}. Inspect its error above.')
+        print('Stopping remaining services. Run setup.bat after stopping all old app terminals, then start.bat.')
     except KeyboardInterrupt:print('\nStopping TradePrism...')
     finally:
         for p in processes:

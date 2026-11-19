@@ -31,12 +31,12 @@ def run_one():
                 from .db import Record
                 if not s.get(Record,result['version']): append(s,'model','system',symbol,result,result['version'])
             if kind=='auto_train':
-                from .db import ResearchState
+                from .db import ResearchState, ChartTrack
                 with session() as s:
-                    state=s.get(ResearchState,symbol)
+                    state=s.get(ResearchState,symbol) if tf=='15m' else s.get(ChartTrack,f'{symbol}:{tf}')
                     if state: state.trained_bar=meta['last']
                 from .continuous import cache_analysis
-                cache_analysis(symbol)
+                cache_analysis(symbol,tf)
             detail=f"Saved research model {result['version']} with held-out evaluation"
         else: raise ValueError('Unknown job kind')
         advance_paper()
@@ -50,8 +50,8 @@ def run_one():
     with session() as s:
         job=s.get(Job,jid); job.status=status; job.detail=detail; job.updated=now()
         if kind=='auto_train':
-            from .db import ResearchState
-            state=s.get(ResearchState,symbol)
+            from .db import ResearchState, ChartTrack
+            state=s.get(ResearchState,symbol) if tf=='15m' else s.get(ChartTrack,f'{symbol}:{tf}')
             if state: state.detail=detail
     return True
 

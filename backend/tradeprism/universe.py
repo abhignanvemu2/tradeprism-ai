@@ -4,7 +4,7 @@ import json
 import re
 import httpx
 from sqlalchemy import select
-from .db import Instrument, ResearchState, MonitorState, session, now
+from .db import Instrument, ResearchState, ChartTrack, MonitorState, session, now
 
 
 def status(key, body=None):
@@ -54,14 +54,20 @@ def discover():
             found[symbol]=info
     if not found: raise ValueError('No supported equity instruments in provider master')
     with session() as s:
+        existing={row.symbol:row for row in s.scalars(select(Instrument))}
+        states=set(s.scalars(select(ResearchState.symbol)))
+        tracks=set(s.scalars(select(ChartTrack.key)))
+        # Fetch identities once, then flush in bulk. Avoid tens of thousands of
+        # SELECT/autoflush pairs while live quotes wait for the SQLite writer.
         for symbol,info in found.items():
-            row=s.get(Instrument,symbol)
-            if row: row.body=json.dumps(info)
+            if symbol in existing: existing[symbol].body=json.dumps(info)
             else: s.add(Instrument(symbol=symbol,body=json.dumps(info)))
-            if not s.get(ResearchState,symbol): s.add(ResearchState(symbol=symbol))
-        # Remove retired instruments from active discovery, preserving research evidence.
-        for row in s.scalars(select(Instrument)):
-            if row.symbol not in found: s.delete(row)
-    status('universe',{'count':len(found),'source':'Upstox NSE/BSE equity-segment masters; supported stock groups','discovered_at':now()})
+            if symbol not in states: s.add(ResearchState(symbol=symbol))
+            for tf in ('1m','5m','1h','1d'):
+                key=f'{symbol}:{tf}'
+                if key not in tracks: s.add(ChartTrack(key=key,symbol=symbol,timeframe=tf))
+        for symbol,row in existing.items():
+            if symbol not in found: s.delete(row)
+    status('universe',{'chart_schema':2,'count':len(found),'source':'Upstox NSE/BSE equity-segment masters; supported stock groups','discovered_at':now()})
     load_registry()
     return found
