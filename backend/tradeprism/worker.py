@@ -14,11 +14,13 @@ def run_one():
         if not claimed: return False
         jid,kind,symbol,tf=job.id,job.kind,job.symbol,job.timeframe
     try:
+        from .universe import load_registry
+        load_registry()
         if kind=='ingest':
             result=ingest(symbol,tf)
             detail=f"Stored {result['count']} genuine completed candles from {result['source']}"
-        elif kind in ('train','prepare'):
-            if kind=='prepare': ingest(symbol,tf,10000)
+        elif kind in ('train','prepare','auto_train','reconcile'):
+            if kind in ('prepare','reconcile'): ingest(symbol,tf,10000,reconcile=kind=='reconcile')
             meta=metadata(symbol,tf)
             if not meta: raise ValueError('Market data unavailable; fetch genuine history first.')
             if meta.get('missing_intervals'): raise ValueError('Historical gaps must be reconciled before training.')
@@ -28,6 +30,13 @@ def run_one():
             with session() as s:
                 from .db import Record
                 if not s.get(Record,result['version']): append(s,'model','system',symbol,result,result['version'])
+            if kind=='auto_train':
+                from .db import ResearchState
+                with session() as s:
+                    state=s.get(ResearchState,symbol)
+                    if state: state.trained_bar=meta['last']
+                from .continuous import cache_analysis
+                cache_analysis(symbol)
             detail=f"Saved research model {result['version']} with held-out evaluation"
         else: raise ValueError('Unknown job kind')
         advance_paper()
@@ -40,6 +49,10 @@ def run_one():
         traceback.print_exc()
     with session() as s:
         job=s.get(Job,jid); job.status=status; job.detail=detail; job.updated=now()
+        if kind=='auto_train':
+            from .db import ResearchState
+            state=s.get(ResearchState,symbol)
+            if state: state.detail=detail
     return True
 
 def main():

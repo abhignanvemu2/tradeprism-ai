@@ -35,7 +35,7 @@ def stats(rows):
     return {'trades':n,'win_rate':float((returns>0).mean()),'win_rate_95ci':wilson(int((returns>0).sum()),n),'net_expectancy':float(returns.mean()),'average_win':float(gains.mean()) if len(gains) else 0,'average_loss':float(losses.mean()) if len(losses) else 0,'profit_factor':float(gains.sum()/-losses.sum()) if losses.sum()<0 else None,'max_drawdown':float(-draw.min()),'expired':sum(x['event']=='expired' for x in selected),'target_hits':sum(x['label'] for x in selected),'start':selected[0]['time'],'end':selected[-1]['time'],'equity_curve':curve.tolist(),'assumptions':'Sequential non-overlapping trades, full-notional returns, 15 bps per side; research curve, not account returns.'}
 
 def train(frame, symbol, tf, tick, provenance):
-    digest=hashlib.sha256((frame[['time','open','high','low','close','volume']].to_json()+VERSION+str(tick)).encode()).hexdigest()
+    digest=hashlib.sha256((frame[['time','open','high','low','close','volume']].to_json()+VERSION+str(tick)+str(provenance.get('reconciled_at',0))).encode()).hexdigest()
     version=f'{symbol}-{tf}-{digest[:16]}'
     folder=DATA/'models'/version
     if (folder/'report.json').exists():

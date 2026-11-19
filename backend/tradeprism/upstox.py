@@ -13,6 +13,9 @@ _MASTER=(0,[])
 
 def instrument(symbol):
     global _MASTER
+    from .universe import load_registry
+    saved=load_registry().get(symbol)
+    if saved: return saved
     from .providers import DataUnavailable
     if time.time()-_MASTER[0]>3600:
         try:

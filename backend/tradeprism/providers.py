@@ -24,6 +24,9 @@ class DataUnavailable(ValueError):
 def request(url, headers=None, params=None, raw=False):
     for attempt in range(3):
         try:
+            if url.startswith("https://api.upstox.com/"):
+                from .throttle import pace
+                pace()
             with httpx.Client(timeout=15, follow_redirects=False) as client:
                 r = client.get(url, headers=headers, params=params)
             if r.status_code in (429, 500, 502, 503, 504):

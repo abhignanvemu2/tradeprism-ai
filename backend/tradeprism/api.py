@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import select, func
 from .db import init, session, Job, Workspace, now
 from .providers import REGISTRY, SECONDS
 from .quant import risk, HORIZON
@@ -36,6 +36,8 @@ async def lifespan(app):
 app=FastAPI(title='TradePrism AI',version='0.1.0',lifespan=lifespan)
 
 def valid(symbol,tf):
+    from .universe import load_registry
+    load_registry()
     if symbol not in REGISTRY or tf not in SECONDS: raise HTTPException(422,'Unsupported instrument or timeframe')
 
 class Task(BaseModel):
@@ -71,6 +73,8 @@ def health(): return {'service':'TradePrism','state':'running','real_order_place
 
 @app.get('/instruments')
 def instruments(owner=Depends(auth)):
+    from .universe import load_registry
+    load_registry()
     return [{'symbol':s,**m,'timeframes':list(SECONDS)} for s,m in REGISTRY.items() if m['asset']=='equity']
 
 @app.get('/analysis/{symbol}')
@@ -86,19 +90,58 @@ def snapshot(symbol:str,timeframe:str='1h',owner=Depends(auth)):
     with session() as s: identifier=append(s,'signal',owner,symbol,result)
     return {'id':identifier,**result}
 
+@app.get('/monitor')
+def monitor(owner=Depends(auth)):
+    from .db import Instrument, ResearchState, LiveQuote
+    from .universe import status
+    with session() as s:
+        total=s.scalar(select(func.count()).select_from(Instrument))
+        collected=s.scalar(select(func.count()).select_from(ResearchState).join(Instrument,Instrument.symbol==ResearchState.symbol).where(ResearchState.last_bar>0))
+        trained=s.scalar(select(func.count()).select_from(ResearchState).join(Instrument,Instrument.symbol==ResearchState.symbol).where(ResearchState.trained_bar>0))
+        fresh=s.scalar(select(func.count()).select_from(LiveQuote).join(Instrument,Instrument.symbol==LiveQuote.symbol).where(LiveQuote.received>now()-30,LiveQuote.trade_time>now()-60))
+        pending=s.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['queued','running'])))
+    return {'universe':total,'histories':collected,'auto_trained':trained,'recent_trades':fresh,'pending_jobs':pending,
+        'feed':status('feed'),'collector':status('collector'),'discovery':status('universe'),
+        'timeframe':'15m','training':'Automatic batch retraining after new completed outcomes; not tick-by-tick learning',
+        'coverage':'All discovered NSE/BSE EQ histories queued. Streaming rotates above 5000; not simultaneous full-market chart analysis.'}
+
+@app.get('/quotes/{symbol}')
+def quote(symbol:str,owner=Depends(auth)):
+    from .db import LiveQuote
+    with session() as s:
+        q=s.get(LiveQuote,symbol)
+        if not q: return {'symbol':symbol,'state':'No streamed price yet'}
+        return {'symbol':symbol,'price':q.price,'previous_close':q.previous_close,'trade_time':q.trade_time,
+            'received':q.received,'state':'Recent trade' if now()-q.received<30 and now()-q.trade_time<60 else 'Last known trade — stale or market closed'}
+
 @app.get('/scanner')
-def scanner(timeframe:str='1h',owner=Depends(auth)):
-    valid('BTC-USD',timeframe)
-    results=[]
-    for symbol in [s for s,m in REGISTRY.items() if m['asset']=='equity']:
-        a=analyze(symbol,timeframe); a.pop('candles',None); a.pop('overlays',None)
-        results.append(a)
-    return {'configured':len(results),'analyzed':sum('indicators' in x for x in results),'unavailable':sum(x['state']=='Market data unavailable' for x in results),'actionable':0,'state':'No qualifying actionable setups; research candidates only','results':results}
+def scanner(timeframe:str='15m',offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),search:str=Query('',max_length=80),owner=Depends(auth)):
+    from .db import Instrument, ResearchState, LiveQuote
+    with session() as s:
+        query=select(Instrument)
+        if search: query=query.where(Instrument.symbol.contains(search.upper(),autoescape=True))
+        total=s.scalar(select(func.count()).select_from(query.subquery()))
+        instruments=list(s.scalars(query.order_by(Instrument.symbol).offset(offset).limit(limit)))
+        results=[]
+        for inst in instruments:
+            state=s.get(ResearchState,inst.symbol); q=s.get(LiveQuote,inst.symbol)
+            a=json.loads(state.analysis) if state and timeframe=='15m' else {}
+            # Cached analysis must not keep a WATCH badge after a feed outage.
+            if now()-a.get('data_timestamp',0)>2700: a.update(decision='NO TRADE',state='Historical or unavailable chart data')
+            results.append({**a,'symbol':inst.symbol,'source':'upstox','decision':a.get('decision','NO TRADE'),
+                'state':a.get('state',state.detail if state else 'Waiting for history'),
+                'price':q.price if q else None,'quote_time':q.trade_time if q else None,
+                'quote_fresh':bool(q and now()-q.received<30 and now()-q.trade_time<60),
+                'training_detail':state.detail if state else 'Waiting for discovery',
+                'analysis_time':a.get('generated_at')})
+    return {'configured':total,'offset':offset,'limit':limit,'analyzed':sum('indicators' in x for x in results),
+        'unavailable':sum('indicators' not in x for x in results),'actionable':0,'results':results,
+        'state':'Live prices; automatic 15m research coverage depends on collection and training backlog'}
 
 @app.post('/jobs',status_code=202)
 def enqueue(task:Task,owner=Depends(auth)):
     valid(task.symbol,task.timeframe)
-    if task.kind not in ('ingest','train','prepare'): raise HTTPException(422,'Unsupported task')
+    if task.kind not in ('ingest','train','prepare','reconcile'): raise HTTPException(422,'Unsupported task')
     with session() as s:
         pending=s.scalar(select(Job).where(Job.status.in_(['queued','running']),Job.symbol==task.symbol,Job.timeframe==task.timeframe,Job.kind==task.kind))
         if pending: return {'id':pending.id,'state':pending.status}

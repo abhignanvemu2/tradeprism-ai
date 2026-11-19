@@ -4,6 +4,8 @@ from .providers import SECONDS
 
 def research_frame(frame,meta,tf):
     if meta['asset']!='equity':return frame
+    if meta.get('stock_group') and meta['stock_group'] not in ('EQ','A','B','X'):
+        raise ValueError('This stock group requires settlement/session review; the current intraday training strategy is not enabled for it. Prices and charts remain available.')
     if tf not in ('1m','5m','15m'):
         raise ValueError('Indian-stock research currently supports 1m, 5m or 15m only, with all 12 outcome bars inside one session. Select 15m to start.')
     d=frame.copy()

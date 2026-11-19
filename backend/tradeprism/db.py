@@ -57,6 +57,35 @@ class Workspace(Base):
     body = Column(Text, nullable=False)
     updated = Column(Float, nullable=False)
 
+class Instrument(Base):
+    __tablename__ = 'instruments'
+    symbol = Column(String(40), primary_key=True)
+    body = Column(Text, nullable=False)
+
+class MonitorState(Base):
+    __tablename__ = 'monitor_state'
+    key = Column(String(40), primary_key=True)
+    body = Column(Text, nullable=False)
+    updated = Column(Float, nullable=False)
+
+class LiveQuote(Base):
+    __tablename__ = 'live_quotes'
+    symbol = Column(String(40), primary_key=True)
+    price = Column(Float, nullable=False)
+    previous_close = Column(Float, nullable=False)
+    trade_time = Column(Float, nullable=False)
+    received = Column(Float, nullable=False)
+
+class ResearchState(Base):
+    __tablename__ = 'research_state'
+    symbol = Column(String(40), primary_key=True)
+    next_fetch = Column(Float, nullable=False, default=0, index=True)
+    last_bar = Column(Float, nullable=False, default=0)
+    trained_bar = Column(Float, nullable=False, default=0)
+    attempted_bar = Column(Float, nullable=False, default=0)
+    detail = Column(Text, nullable=False, default='Waiting for historical data')
+    analysis = Column(Text, nullable=False, default='{}')
+
 def init():
     Base.metadata.create_all(engine)
     # Database-level immutability also prevents accidental code-path rewrites.

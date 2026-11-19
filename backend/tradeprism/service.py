@@ -29,8 +29,17 @@ def bars(symbol, tf, until=None):
 def metadata(symbol, tf):
     return next((x for x in records('ingestion',symbol=symbol) if x['timeframe']==tf),None)
 
-def ingest(symbol, tf, count=1800):
+def ingest(symbol, tf, count=1800, reconcile=False):
+    previous_meta=metadata(symbol,tf) or {}
+    if reconcile:
+        with session() as s:
+            existing_times=list(s.scalars(select(Candle.time).where(Candle.symbol==symbol,Candle.timeframe==tf)))
+        count=max(count,len(existing_times))
     rows, meta=fetch(symbol,tf,count)
+    if previous_meta.get('reconciled_at'): meta['reconciled_at']=previous_meta['reconciled_at']
+    if reconcile and existing_times and not set(existing_times).issubset({row[0] for row in rows}):
+        raise ValueError('Cannot reconcile a partial history. Provider response must cover the entire stored date range.')
+    revisions=[]
     with session() as s:
         existing={x.time:x for x in s.scalars(select(Candle).where(Candle.symbol==symbol,Candle.timeframe==tf))}
         for t,o,h,l,c,v in rows:
@@ -40,10 +49,22 @@ def ingest(symbol, tf, count=1800):
                     raise ValueError('Existing history uses another provider. Use a new DATA_DIR; histories cannot be mixed.')
                 # Do not silently rewrite research history after provider corrections.
                 if [old.open,old.high,old.low,old.close,old.volume]!=[o,h,l,c,v]:
-                    raise ValueError('Provider historical revision detected; ingestion rejected. Reconcile adjusted prices before training.')
+                    from datetime import datetime, timezone
+                    fields=('open','high','low','close','volume')
+                    before={k:getattr(old,k) for k in fields}
+                    after=dict(zip(fields,(o,h,l,c,v)))
+                    changed=[k for k in fields if before[k]!=after[k]]
+                    if not reconcile:
+                        stamp=datetime.fromtimestamp(t,timezone.utc).isoformat()
+                        raise ValueError(f'Provider revision at {stamp}: {", ".join(changed)} changed. No history was overwritten. Use "Reconcile history + retrain" to archive old values and accept provider corrections for research.')
+                    revisions.append({'time':t,'before':before,'after':after})
+                    for k,value in after.items(): setattr(old,k,value)
                 old.fetched_at=meta['fetched_at']
             else:
                 s.add(Candle(symbol=symbol,timeframe=tf,time=t,open=o,high=h,low=l,close=c,volume=v,source=meta['source'],fetched_at=meta['fetched_at']))
+        if revisions:
+            meta['reconciled_at']=now()
+            meta['revision_id']=append(s,'data_revision','system',symbol,{'timeframe':tf,'source':meta['source'],'revisions':revisions,'note':'Explicitly accepted provider corrections; old model artifacts retained; corporate actions not independently verified.'})
         append(s,'ingestion','system',symbol,meta)
     return meta
 
@@ -72,6 +93,8 @@ def analyze(symbol,tf,until=None):
     models=[x for x in records('model',symbol=symbol) if x['timeframe']==tf]
     if until is not None:
         result['reasons'].append('Replay uses only the selected past bars; predictive inference is disabled in practice replay.')
+    elif models and meta and meta.get('reconciled_at',0)>models[0]['trained_at']:
+        result['reasons'].append('History was reconciled after the last model trained; retraining required. Old-model inference is suppressed.')
     elif models:
         result['model']=models[0]
         result['prediction']=infer(f,models[0])

@@ -40,6 +40,30 @@ services:
     depends_on:
       api:
         condition: service_healthy
+  collector:
+    build: ./backend
+    command: ["python", "-m", "tradeprism.continuous"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://tradeprism:${POSTGRES_PASSWORD}@db:5432/tradeprism
+      DATA_DIR: /data
+    volumes:
+      - research:/data
+    depends_on:
+      api:
+        condition: service_healthy
+  live:
+    build: ./backend
+    command: ["python", "-m", "tradeprism.live"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://tradeprism:${POSTGRES_PASSWORD}@db:5432/tradeprism
+      DATA_DIR: /data
+    volumes:
+      - research:/data
+    depends_on:
+      api:
+        condition: service_healthy
   web:
     build: ./frontend
     environment:
