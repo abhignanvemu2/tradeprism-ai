@@ -23,6 +23,14 @@ start.bat
 
 If `.env` does not exist, the launcher creates it with a random app login key. Add the Upstox token and restart. Open http://localhost:3000 and enter the app key from `.env`. Keep the launcher window open; Ctrl+C stops its services. Never commit `.env` or share either token.
 
+## Searchable stocks, complete tables and 3D overview
+
+The Dashboard replaces the daily-results table with the **Stocks** table. Search matches symbols and company names across the complete discovered universe. Server-side sorting happens before pagination: highest recorded paper win rate is the default, with price, gainers/losers, symbol and resolved-count sorting available. Select the timeframe, result period and minimum sample count. Stocks with no resolved forecasts have no win rate; small samples are marked explicitly. This is observed paper performance, not a new prediction or proof of trading profitability.
+
+The stock table and separate **Background** module refresh every five seconds. First/previous/next/last buttons, a page-number input and page sizes up to 200 make every matching record accessible. Forecast history also uses pagination instead of the latest-100 display cutoff; background jobs are no longer limited to the latest five/30 in the UI. Live sorting can move rows between pages as prices or results change; use symbol sorting for easier browsing.
+
+The Three.js overview shows the counts of rising, falling, unchanged and unavailable stocks for the entire filtered result, including records outside the current page. It uses stored provider prices against previous close, not invented chart values. Reduced-motion preferences and a pause control are supported. Rendering stops in hidden/offscreen views and resources are released on navigation; numeric counts remain available without WebGL.
+
 ## Automatic dashboard and prospective results (v0.4)
 
 Once `start.bat` is running with a working Upstox token, **Dashboard** refreshes automatically. You do not have to click Fetch or Train for each stock. Opening a chart gives it collection priority; the discovered NSE/BSE universe keeps progressing in the background.

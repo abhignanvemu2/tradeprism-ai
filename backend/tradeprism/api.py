@@ -107,6 +107,20 @@ def focus(p:Focus,owner=Depends(auth)):
             if row: row.next_fetch=-now()
     return {'state':'Selected chart prioritized; universe collection remains automatic'}
 
+@app.get('/stocks')
+def stocks(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),search:str=Query('',max_length=100),
+    timeframe:str=Query('15m',pattern='^(1m|5m|15m)$'),period:str=Query('all',pattern='^(all|today|week)$'),
+    sort:str=Query('win_rate',pattern='^(win_rate|change|price|symbol|closed)$'),direction:str=Query('desc',pattern='^(asc|desc)$'),
+    minimum:int=Query(0,ge=0),owner=Depends(auth)):
+    from .tables import stock_table
+    return stock_table(offset,limit,search,timeframe,period,sort,direction,minimum)
+
+@app.get('/activity')
+def activity(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),search:str=Query('',max_length=100),
+    state:str=Query('all',pattern='^(all|queued|running|completed|failed)$'),owner=Depends(auth)):
+    from .tables import activity_table
+    return activity_table(offset,limit,search,state)
+
 @app.get('/dashboard')
 def dashboard(owner=Depends(auth)):
     from .forward import dashboard as summary

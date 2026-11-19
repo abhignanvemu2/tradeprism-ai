@@ -1,0 +1,8 @@
+'use client';
+import {useEffect,useState} from 'react';
+export default function Pagination({offset,limit,total,onOffset,onLimit}:{offset:number;limit:number;total:number;onOffset:(n:number)=>void;onLimit:(n:number)=>void}){
+ const pages=Math.max(1,Math.ceil(total/limit)),page=Math.floor(offset/limit)+1;
+ const [draft,setDraft]=useState(String(page));useEffect(()=>setDraft(String(page)),[page]);
+ useEffect(()=>{if(offset>0&&offset>=total)onOffset(Math.max(0,(pages-1)*limit));},[total,offset,limit,pages,onOffset]);
+ return <div className="pagination"><span>{total?offset+1:0}–{Math.min(offset+limit,total)} of {total.toLocaleString()} records</span><div className="inline"><button aria-label="First page" disabled={page<=1} onClick={()=>onOffset(0)}>First</button><button aria-label="Previous page" disabled={page<=1} onClick={()=>onOffset(Math.max(0,offset-limit))}>Previous</button><form onSubmit={e=>{e.preventDefault();const n=Number(draft);if(Number.isInteger(n)&&n>=1&&n<=pages)onOffset((n-1)*limit);else setDraft(String(page));}}><label>Page <input aria-label="Go to page" type="number" min={1} max={pages} value={draft} onChange={e=>setDraft(e.target.value)}/></label><span> of {pages}</span><button type="submit">Go</button></form><button aria-label="Next page" disabled={page>=pages} onClick={()=>onOffset(offset+limit)}>Next</button><button aria-label="Last page" disabled={page>=pages} onClick={()=>onOffset((pages-1)*limit)}>Last</button><label>Rows<select value={limit} onChange={e=>{onLimit(Number(e.target.value));onOffset(0);}}>{[25,50,100,200].map(n=><option key={n}>{n}</option>)}</select></label></div></div>;
+}
