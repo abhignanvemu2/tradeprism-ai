@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import select, func
-from .db import init, session, Job, Workspace, now
+from .db import init, session, Job, Workspace, Favorite, now
 from .providers import REGISTRY, SECONDS
 from .quant import risk, HORIZON
 from .service import analyze, records, append, metadata
@@ -278,3 +278,31 @@ def explain(p:Explain,owner=Depends(auth)):
     from .explanations import explain_evidence
     a=analyze(p.symbol,p.timeframe)
     return explain_evidence(a,p.question)
+
+
+@app.get('/favorites')
+def favorites(owner=Depends(auth)):
+    with session() as s:
+        return list(s.scalars(select(Favorite.symbol).where(Favorite.owner==owner).order_by(Favorite.symbol)))
+
+@app.put('/favorites/{symbol}')
+def add_favorite(symbol:str,owner=Depends(auth)):
+    valid(symbol,'1h')
+    from sqlalchemy.exc import IntegrityError
+    try:
+        with session() as s:
+            if not s.get(Favorite,(owner,symbol)):
+                s.add(Favorite(owner=owner,symbol=symbol,created=now()))
+    except IntegrityError:
+        # Concurrent identical PUT requests are idempotent.
+        with session() as s:
+            if not s.get(Favorite,(owner,symbol)): raise
+    return {'symbol':symbol,'favorite':True}
+
+@app.delete('/favorites/{symbol}')
+def remove_favorite(symbol:str,owner=Depends(auth)):
+    # Allow removal even if an instrument is no longer in the discovered universe.
+    from sqlalchemy import delete
+    with session() as s:
+        s.execute(delete(Favorite).where(Favorite.owner==owner,Favorite.symbol==symbol))
+    return {'symbol':symbol,'favorite':False}

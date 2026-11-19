@@ -59,6 +59,12 @@ class Workspace(Base):
     body = Column(Text, nullable=False)
     updated = Column(Float, nullable=False)
 
+class Favorite(Base):
+    __tablename__ = 'favorites'
+    owner = Column(String(160), primary_key=True)
+    symbol = Column(String(40), primary_key=True)
+    created = Column(Float, nullable=False)
+
 class Instrument(Base):
     __tablename__ = 'instruments'
     symbol = Column(String(40), primary_key=True)

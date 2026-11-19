@@ -104,3 +104,8 @@ The `docs/` files retain the detailed original research protocol and scope track
 
 Feed limits: https://upstox.com/developer/api-documentation/v3/get-market-data-feed/
 REST quotas: https://upstox.com/developer/api-documentation/rate-limiting/
+
+### Workspace stock search and favorites
+Workspace now searches the entire discovered instrument list by symbol, company name, or exchange, with pagination and an Open chart action. Star a stock in these search results or use Add to favorites beside the selected stock. The Favorites navigation module lists every saved stock and lets you search, open, or remove it.
+
+Favorites are saved in the local database per configured user name, survive app restarts, and are not shared with other users. The favorites table is created automatically on backend startup. A stock that leaves the discovered universe stays in Favorites with an unavailable label and can still be removed.
