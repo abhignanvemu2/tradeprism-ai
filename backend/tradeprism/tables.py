@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, func, case, cast, Float, JSON, or_, and_
+from .scope import SYMBOLS
 from .db import Instrument, LiveQuote, Forecast, ForecastResult, Job, session, now
 
 
@@ -24,7 +25,7 @@ def stock_table(offset=0,limit=25,search='',timeframe='15m',period='all',sort='w
         name=func.json_extract(Instrument.body,'$.name') if s.bind.dialect.name=='sqlite' else cast(Instrument.body,JSON)['name'].as_string()
         q=select(Instrument,LiveQuote,closed.label('closed'),wins.label('wins'),
             func.coalesce(totals.c.losses,0).label('losses'),func.coalesce(totals.c.pending,0).label('pending'),rate.label('rate'),change.label('change'))\
-            .outerjoin(LiveQuote,LiveQuote.symbol==Instrument.symbol).outerjoin(totals,totals.c.symbol==Instrument.symbol)
+            .outerjoin(LiveQuote,LiveQuote.symbol==Instrument.symbol).outerjoin(totals,totals.c.symbol==Instrument.symbol).where(Instrument.symbol.in_(SYMBOLS))
         term=search.strip().lower()
         if term: q=q.where(or_(func.lower(Instrument.symbol).contains(term,autoescape=True),func.lower(name).contains(term,autoescape=True)))
         if minimum: q=q.where(closed>=minimum)
@@ -43,7 +44,7 @@ def stock_table(offset=0,limit=25,search='',timeframe='15m',period='all',sort='w
         for inst,quote,n,w,losses,pending,win_rate,change_pct in rows:
             info=json.loads(inst.body)
             records.append({'symbol':inst.symbol,'name':info.get('name',inst.symbol),'exchange':info.get('segment','').split('_')[0],
-                'price':quote.price if quote else None,'previous_close':quote.previous_close if quote else None,
+                'provider_symbol':info.get('trading_symbol',inst.symbol),'available':bool(info.get('instrument_key')),'price':quote.price if quote else None,'previous_close':quote.previous_close if quote else None,
                 'change':quote.price-quote.previous_close if quote and quote.previous_close>0 else None,'change_pct':change_pct,
                 'quote_time':quote.trade_time if quote else None,'quote_fresh':bool(quote and stamp-quote.received<30 and stamp-quote.trade_time<60),
                 'win_rate':win_rate,'closed':n,'wins':w,'losses':losses,'pending':pending,'limited_evidence':n<30})

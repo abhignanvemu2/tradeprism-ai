@@ -20,17 +20,17 @@ def forecast(symbol,key,net,event='target',tf='15m',event_time=None):
 
 
 def test_global_sort_before_pagination_and_no_results_are_null():
-    stock('AAA','First company',90);stock('ZZZ','Last company',110);stock('EMPTY','No forecasts')
-    forecast('AAA','loss',-.01,'stop');forecast('ZZZ','win',.02)
+    stock('AXISBANK','First company',90);stock('TCS','Last company',110);stock('WIPRO','No forecasts')
+    forecast('AXISBANK','loss',-.01,'stop');forecast('TCS','win',.02)
     result=stock_table(limit=1)
-    assert result['total']==3 and result['records'][0]['symbol']=='ZZZ'
+    assert result['total']==3 and result['records'][0]['symbol']=='TCS'
     assert stock_table(offset=2,limit=1)['records'][0]['win_rate'] is None
     assert result['breadth']['rising']==1 and result['breadth']['falling']==1 and result['breadth']['unavailable']==1
-    assert stock_table(sort='change',direction='asc')['records'][0]['symbol']=='AAA'
+    assert stock_table(sort='change',direction='asc')['records'][0]['symbol']=='AXISBANK'
 
 
 def test_search_matches_company_and_symbol_case_insensitively_and_escapes_wildcards():
-    stock('M&M','Mahindra and Mahindra',100);stock('PERCENT','100% Works');stock('OTHER','Something else')
+    stock('M&M','Mahindra and Mahindra',100);stock('INFY','100% Works');stock('ITC','Something else')
     assert stock_table(search=' mahINDRA ')['total']==1
     assert stock_table(search='m&m')['records'][0]['symbol']=='M&M'
     assert stock_table(search='%')['total']==1
@@ -39,10 +39,10 @@ def test_search_matches_company_and_symbol_case_insensitively_and_escapes_wildca
 
 
 def test_win_denominator_excludes_unfilled_pending_and_missing_data():
-    stock('TEST','Example')
-    forecast('TEST','win',.02);forecast('TEST','loss',-.01,'stop');forecast('TEST','flat',0,'expired')
-    forecast('TEST','unfilled',None,'unfilled');forecast('TEST','gap',None,'data_gap');forecast('TEST','pending',None,'pending')
-    forecast('TEST','other-timeframe',.03,tf='1m')
+    stock('HDFCBANK','Example')
+    forecast('HDFCBANK','win',.02);forecast('HDFCBANK','loss',-.01,'stop');forecast('HDFCBANK','flat',0,'expired')
+    forecast('HDFCBANK','unfilled',None,'unfilled');forecast('HDFCBANK','gap',None,'data_gap');forecast('HDFCBANK','pending',None,'pending')
+    forecast('HDFCBANK','other-timeframe',.03,tf='1m')
     row=stock_table()['records'][0]
     assert row['closed']==3 and row['wins']==1 and row['losses']==1 and row['pending']==1
     assert abs(row['win_rate']-1/3)<1e-10
@@ -51,10 +51,10 @@ def test_win_denominator_excludes_unfilled_pending_and_missing_data():
 
 
 def test_today_filter_uses_ist_outcome_date_not_issue_date():
-    stock('TEST','Example')
+    stock('HDFCBANK','Example')
     midnight=datetime.now(ZoneInfo('Asia/Kolkata')).replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
-    forecast('TEST','yesterday',.02,event_time=midnight-1)
-    forecast('TEST','today',-.02,'stop',event_time=midnight+1)
+    forecast('HDFCBANK','yesterday',.02,event_time=midnight-1)
+    forecast('HDFCBANK','today',-.02,'stop',event_time=midnight+1)
     row=stock_table(period='today')['records'][0]
     assert row['closed']==1 and row['win_rate']==0
     assert stock_table()['records'][0]['closed']==2
@@ -62,7 +62,7 @@ def test_today_filter_uses_ist_outcome_date_not_issue_date():
 
 def test_all_activity_records_are_accessible_and_ties_are_stable():
     with session() as s:
-        for i in range(251):s.add(Job(id=f'job-{i:04}',symbol='TEST',timeframe='15m',kind='train',status='completed',created=100,updated=100,detail='Test only'))
+        for i in range(251):s.add(Job(id=f'job-{i:04}',symbol='HDFCBANK',timeframe='15m',kind='train',status='completed',created=100,updated=100,detail='Test only'))
     seen=[]
     for offset in range(0,251,25):
         page=activity_table(offset=offset,limit=25)

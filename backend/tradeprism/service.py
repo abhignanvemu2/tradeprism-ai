@@ -40,7 +40,7 @@ def ingest(symbol, tf, count=1800, reconcile=False):
     if reconcile and existing_times and not set(existing_times).issubset({row[0] for row in rows}):
         raise ValueError('Cannot reconcile a partial history. Provider response must cover the entire stored date range.')
     revisions=[]
-    with session() as s:
+    with session(write=True) as s:
         existing={x.time:x for x in s.scalars(select(Candle).where(Candle.symbol==symbol,Candle.timeframe==tf))}
         for t,o,h,l,c,v in rows:
             if t in existing:
@@ -66,9 +66,13 @@ def ingest(symbol, tf, count=1800, reconcile=False):
             meta['reconciled_at']=now()
             meta['revision_id']=append(s,'data_revision','system',symbol,{'timeframe':tf,'source':meta['source'],'revisions':revisions,'note':'Explicitly accepted provider corrections; old model artifacts retained; corporate actions not independently verified.'})
         append(s,'ingestion','system',symbol,meta)
+    from .forward import resolve
+    resolve(symbol,tf,meta)
     return meta
 
 def analyze(symbol,tf,until=None):
+    from .scope import supported
+    if not supported(symbol,tf):raise ValueError('Select one of the 100 stocks and 5m or 15m')
     raw=bars(symbol,tf,until)
     meta=metadata(symbol,tf)
     result={'symbol':symbol,'timeframe':tf,'generated_at':now(),'source':REGISTRY[symbol]['provider'],'state':'Market data unavailable','decision':'NO TRADE','reasons':[],'probability':None,'candles':raw.tail(1000).to_dict('records'),'metadata':meta,'replay':until is not None}
@@ -79,7 +83,8 @@ def analyze(symbol,tf,until=None):
     result.update(state='Historical replay — practice only' if until else ('Stale historical data' if stale else 'Completed historical candles — polling'),data_timestamp=last,window_start=float(raw.iloc[0].time),window_end=last,bars_used=len(raw))
     if len(raw)<60:
         result['reasons']=['Insufficient historical data: need at least 60 completed bars.']; return result
-    f=features(raw); r=f.iloc[-1]
+    from .training import research_frame
+    f=features(research_frame(raw,meta or {'asset':'equity'},tf)); r=f.iloc[-1]
     numeric=lambda value: float(value) if pd.notna(value) else None
     result['indicators']={k:numeric(r[k]) for k in ['rsi','atr','ema20','ema50','support','resistance','macd','bb_upper','bb_lower']}
     result['trend']='Bullish' if r.ema20>r.ema50 else 'Bearish'
@@ -89,7 +94,7 @@ def analyze(symbol,tf,until=None):
     result['reasons']=['Research workflow: live execution alignment, spread checks and walk-forward validation are not yet approved.']
     if stale and until is None: result['reasons'].append('Data is stale; new actionable signals suppressed.')
     if meta and meta.get('missing_intervals'): result['reasons'].append('Historical gaps detected; inspect data quality.')
-    if REGISTRY[symbol]['asset']=='equity': result['reasons'].append('Corporate-action and exchange-calendar reconciliation is pending.')
+    if REGISTRY[symbol]['asset']=='equity': result['reasons'].append('Large price gaps partition feature history; split ratios are not assumed.')
     models=[x for x in records('model',symbol=symbol) if x['timeframe']==tf]
     if until is not None:
         result['reasons'].append('Replay uses only the selected past bars; predictive inference is disabled in practice replay.')
@@ -97,7 +102,9 @@ def analyze(symbol,tf,until=None):
         result['reasons'].append('History was reconciled after the last model trained; retraining required. Old-model inference is suppressed.')
     elif models:
         result['model']=models[0]
-        result['prediction']=infer(f,models[0])
+        result['setups']=[{'research_plan':plan(r,meta['tick'],direction),'prediction':infer(f,models[0],direction)} for direction in ('LONG','SHORT')]
+        best=max(result['setups'],key=lambda x:x['prediction'].get('probability') or 0)
+        result.update(best)
         result['decision']='WATCH' if not stale and result['prediction'].get('probability') is not None else 'NO TRADE'
     else:
         result['reasons'].append('Predictive model not trained.')

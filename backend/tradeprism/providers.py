@@ -9,14 +9,8 @@ import httpx
 import numpy as np
 
 SECONDS = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400}
-REGISTRY = {
-    'AXISBANK': {'provider': 'upstox', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
-    'HDFCBANK': {'provider': 'upstox', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
-    'ICICIBANK': {'provider': 'upstox', 'venue': 'NSE', 'asset': 'equity', 'currency': 'INR', 'zone': 'Asia/Kolkata'},
-    'BTC-USD': {'provider': 'coinbase', 'venue': 'Coinbase Exchange', 'asset': 'crypto spot', 'currency': 'USD', 'zone': 'UTC'},
-    'ETH-USD': {'provider': 'coinbase', 'venue': 'Coinbase Exchange', 'asset': 'crypto spot', 'currency': 'USD', 'zone': 'UTC'},
-    'EUR_USD': {'provider': 'oanda', 'venue': 'OANDA', 'asset': 'forex', 'currency': 'USD', 'zone': 'America/New_York'},
-}
+from .scope import SYMBOLS
+REGISTRY = {s: {'provider':'upstox','venue':'NSE','asset':'equity','currency':'INR','zone':'Asia/Kolkata'} for s in SYMBOLS}
 
 class DataUnavailable(ValueError):
     pass
@@ -63,7 +57,8 @@ def validate(rows, end):
     return sorted(result.values())
 
 def fetch(symbol, tf, count=1800):
-    if symbol not in REGISTRY or tf not in SECONDS:
+    from .scope import supported
+    if not supported(symbol,tf) or symbol not in REGISTRY:
         raise DataUnavailable('Unsupported instrument or timeframe')
     meta = dict(REGISTRY[symbol])
     step = SECONDS[tf]

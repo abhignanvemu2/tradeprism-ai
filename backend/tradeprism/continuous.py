@@ -5,6 +5,8 @@ import json
 import os
 import time
 import uuid
+import threading
+from .scope import SYMBOLS, TIMEFRAMES, SCHEMA
 from sqlalchemy import select, func
 from .db import init, session, ResearchState, Instrument, Job, Candle, ChartTrack, now
 from .universe import discover, load_registry, status
@@ -24,20 +26,21 @@ def cache_analysis(symbol,tf=TF):
     reasons=quality_reasons(result)
     result['quality']={'qualified':not reasons,'reasons':reasons,'holdout_expectancy':report.get('selected_test',{}).get('net_expectancy'),'holdout_trades':report.get('selected_test',{}).get('trades',0)}
     resolve(symbol,tf,result.get('metadata') or {})
-    publish(result)
+    for setup in result.get('setups',[]) or [result]:
+        publish({**result,**setup})
     result.pop('candles',None); result.pop('overlays',None); result.pop('model',None)
-    with session() as s:
+    with session(write=True) as s:
         row=s.get(ResearchState,symbol) if tf==TF else s.get(ChartTrack,f'{symbol}:{tf}')
         if row: row.analysis=json.dumps(result,allow_nan=False)
 
 
 def schedule_training():
-    with session() as s:
+    with session(write=True) as s:
         active=list(s.scalars(select(Job).where(Job.status.in_(['queued','running']))))
         occupied={j.symbol for j in active}
         capacity=max(0,20-len(active))
         states=s.scalars(select(ResearchState).join(Instrument,Instrument.symbol==ResearchState.symbol)
-            .where(ResearchState.last_bar>0).order_by(ResearchState.attempted_bar,ResearchState.symbol))
+            .where(ResearchState.last_bar>0,ResearchState.symbol.in_(SYMBOLS)).order_by(ResearchState.attempted_bar,ResearchState.symbol))
         for row in states:
             if capacity<=0: break
             if row.symbol in occupied: continue
@@ -53,8 +56,8 @@ def schedule_training():
 
 def collect_one():
     global _COLLECTION_TURN
-    with session() as s:
-        due=select(ResearchState).join(Instrument,Instrument.symbol==ResearchState.symbol).where(ResearchState.next_fetch<=now())
+    with session(write=True) as s:
+        due=select(ResearchState).join(Instrument,Instrument.symbol==ResearchState.symbol).where(ResearchState.next_fetch<=now(),ResearchState.symbol.in_(SYMBOLS))
         # Alternate refreshing existing charts and bootstrapping new ones. A large
         # undiscovered history backlog must not starve already monitored charts.
         preferred=ResearchState.last_bar>0 if _COLLECTION_TURN%2==0 else ResearchState.last_bar==0
@@ -67,17 +70,17 @@ def collect_one():
     status('collector',{'state':'collecting','symbol':symbol,'timeframe':TF})
     try:
         # Bootstrap once, then request enough bars to cover elapsed time, including outages.
-        count=10000 if not previous else min(10000,max(100,int((now()-previous)/STEP)+30))
+        count=10000 if not previous else min(10000,max(3,int((now()-previous)/STEP)+2))
         meta=ingest(symbol,TF,count)
-        with session() as s:
+        with session(write=True) as s:
             row=s.get(ResearchState,symbol)
-            row.last_bar=meta['last']; row.next_fetch=now()+STEP
+            row.last_bar=meta['last']; row.next_fetch=now()+60
             row.detail='Completed candles refreshed; automatic training waits for new labels'
         cache_analysis(symbol)
     except Exception as e:
         # Provider responses do not contain credentials; avoid recording arbitrary network URLs.
         detail=str(e)[:400] if isinstance(e,ValueError) else 'Collection failed; retry in one hour'
-        with session() as s:
+        with session(write=True) as s:
             row=s.get(ResearchState,symbol); row.next_fetch=now()+3600; row.detail=detail
         status('collector',{'state':'retrying','symbol':symbol,'detail':detail})
     return True
@@ -86,8 +89,8 @@ def collect_one():
 def collect_additional():
     global _ADDITIONAL_TURN
     from .providers import SECONDS
-    with session() as s:
-        due=select(ChartTrack).join(Instrument,Instrument.symbol==ChartTrack.symbol).where(ChartTrack.next_fetch<=now())
+    with session(write=True) as s:
+        due=select(ChartTrack).join(Instrument,Instrument.symbol==ChartTrack.symbol).where(ChartTrack.next_fetch<=now(),ChartTrack.timeframe=='5m',ChartTrack.symbol.in_(SYMBOLS))
         preferred=ChartTrack.last_bar>0 if _ADDITIONAL_TURN%2==0 else ChartTrack.last_bar==0
         track=s.scalar(due.where(preferred).order_by(ChartTrack.next_fetch,ChartTrack.key).limit(1))
         if track is None: track=s.scalar(due.order_by(ChartTrack.next_fetch,ChartTrack.key).limit(1))
@@ -98,25 +101,25 @@ def collect_additional():
     status('collector',{'state':'collecting','symbol':symbol,'timeframe':tf})
     try:
         step=SECONDS[tf]
-        count=(10000 if tf in ('1m','5m') else 1800) if not previous else min(10000,max(100,int((now()-previous)/step)+30))
+        count=(10000 if tf in ('5m',) else 1800) if not previous else min(10000,max(3,int((now()-previous)/step)+2))
         meta=ingest(symbol,tf,count)
-        with session() as s:
-            track=s.get(ChartTrack,key); track.last_bar=meta['last']; track.next_fetch=now()+step
-            track.detail='Chart refreshed; automatic model training' if tf in ('1m','5m') else 'Chart available; swing model not implemented'
+        with session(write=True) as s:
+            track=s.get(ChartTrack,key); track.last_bar=meta['last']; track.next_fetch=now()+60
+            track.detail='Chart refreshed; automatic model training' if tf in ('5m',) else 'Chart available; swing model not implemented'
         cache_analysis(symbol,tf)
     except Exception as e:
-        with session() as s:
+        with session(write=True) as s:
             track=s.get(ChartTrack,key); track.next_fetch=now()+3600
             track.detail=str(e)[:400] if isinstance(e,ValueError) else 'Chart collection failed; retry in one hour'
     return True
 
 
 def schedule_additional():
-    with session() as s:
+    with session(write=True) as s:
         active=list(s.scalars(select(Job).where(Job.status.in_(['queued','running']))))
         occupied={(j.symbol,j.timeframe) for j in active}; capacity=max(0,20-len(active))
         tracks=s.scalars(select(ChartTrack).join(Instrument,Instrument.symbol==ChartTrack.symbol)
-            .where(ChartTrack.last_bar>0,ChartTrack.timeframe.in_(['1m','5m']))
+            .where(ChartTrack.last_bar>0,ChartTrack.timeframe=='5m',ChartTrack.symbol.in_(SYMBOLS))
             .order_by(ChartTrack.attempted_bar,ChartTrack.key))
         for track in tracks:
             if not capacity: break
@@ -128,21 +131,47 @@ def schedule_additional():
                 status='queued',created=now(),updated=now(),detail='Automatic timeframe training'))
             track.attempted_bar=track.last_bar; capacity-=1
 
+def watch_outcomes():
+    """Outcome backfills run independently of slow first-time history/training."""
+    from .db import Forecast, ForecastResult
+    from .providers import SECONDS
+    from .forward import refresh_pending
+    while True:
+        try:
+            with session(write=True) as s:
+                pending=s.execute(select(Forecast.symbol,Forecast.timeframe,func.min(Forecast.entry_time))
+                    .outerjoin(ForecastResult,ForecastResult.id==Forecast.id)
+                    .where(ForecastResult.id.is_(None),Forecast.symbol.in_(SYMBOLS),Forecast.timeframe.in_(TIMEFRAMES))
+                    .group_by(Forecast.symbol,Forecast.timeframe)).all()
+            for symbol,tf,entry in pending:
+                if now()<entry+SECONDS[tf]+10:continue
+                try:ingest(symbol,tf,min(10000,max(3,int((now()-entry)/SECONDS[tf])+2)))
+                except Exception as e:
+                    status('outcomes',{'state':'waiting for data','symbol':symbol,'timeframe':tf,'detail':str(e)[:250] if isinstance(e,ValueError) else 'Provider fetch unavailable; automatic retry'})
+            refresh_pending()
+            status('outcomes',{'state':'checking','series':len(pending),'checked_at':now()})
+        except Exception:
+            status('outcomes',{'state':'retrying','detail':'Outcome refresh will retry; no assumed results'})
+        time.sleep(30)
+
 def main():
     init()
+    from .universe import enforce_scope
+    enforce_scope()
     if os.getenv('CONTINUOUS_RESEARCH','1')!='1':
         status('collector',{'state':'disabled'})
         while True: time.sleep(30)
+    threading.Thread(target=watch_outcomes,daemon=True,name="forecast-outcomes").start()
     while True:
         try:
             if not os.getenv('UPSTOX_ACCESS_TOKEN','').strip():
                 status('collector',{'state':'missing token','detail':'Set UPSTOX_ACCESS_TOKEN and restart'})
                 time.sleep(30); continue
-            if now()-status('universe').get('discovered_at',0)>86400 or status('universe').get('chart_schema')!=2:
+            if now()-status('universe').get('discovered_at',0)>86400 or status('universe').get('chart_schema')!=SCHEMA:
                 discover()
             else: load_registry()
             if status('training_strategy').get('version')!=VERSION:
-                with session() as s:
+                with session(write=True) as s:
                     for state in s.scalars(select(ResearchState)): state.attempted_bar=0
                     for state in s.scalars(select(ChartTrack)): state.attempted_bar=0
                 status('training_strategy',{'version':VERSION})

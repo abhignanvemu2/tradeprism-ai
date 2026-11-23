@@ -29,6 +29,6 @@ def test_unknown_stock_rejected_but_delisted_favorite_can_be_removed():
         assert c.put('/favorites/UNKNOWN_STOCK_TEST',headers=ALICE).status_code==422
         with session() as s:
             s.add(Favorite(owner='alice',symbol='DELISTED_TEST',created=1))
-        assert c.get('/favorites',headers=ALICE).json()==['DELISTED_TEST']
+        assert c.get('/favorites',headers=ALICE).json()==[]  # Outside the fixed universe stays archived
         assert c.delete('/favorites/DELISTED_TEST',headers=ALICE).status_code==200
         assert c.get('/favorites',headers=ALICE).json()==[]

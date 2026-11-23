@@ -37,7 +37,7 @@ def decode(payload, mapping, stamp):
 
 
 def save_quotes(pending):
-    with session() as s:
+    with session(write=True) as s:
         for symbol,values in pending.items():
             row=s.get(LiveQuote,symbol)
             if row:
@@ -60,7 +60,7 @@ def run_connection(instruments, offset=0):
         raise ValueError('Unexpected authorized feed address')
     # Default certificate and hostname verification remain enabled.
     ws=websocket.create_connection(uri,timeout=10)
-    pending={}; last_flush=now(); started=now(); last_message=0; segments={}
+    pending={}; samples=[]; last_flush=now(); started=now(); last_message=0; segments={}
     try:
         for i in range(0,len(subscribed),100):
             ws.send_binary(json.dumps({'guid':uuid.uuid4().hex,'method':'sub',
@@ -71,12 +71,15 @@ def run_connection(instruments, offset=0):
                 if not payload: raise ConnectionError('Feed closed')
                 if isinstance(payload,bytes):
                     quotes,market=decode(payload,mapping,now())
+                    samples.extend(quotes.items())
                     for symbol,q in quotes.items():
                         if symbol not in pending or q['trade_time']>=pending[symbol]['trade_time']: pending[symbol]=q
                     segments.update(market); last_message=now()
             except websocket.WebSocketTimeoutException:
                 if now()-max(last_message,started)>60: raise ConnectionError('Feed heartbeat timed out')
             if now()-last_flush>=2:
+                from .forward import observe_quotes
+                observe_quotes(samples);samples.clear()
                 save_quotes(pending); pending.clear(); last_flush=now()
                 status('feed',{'state':'connected','subscribed':len(subscribed),'universe':len(keys),
                     'outside_subscription':max(0,len(keys)-len(subscribed)),
@@ -86,7 +89,10 @@ def run_connection(instruments, offset=0):
             # Reconnect periodically to pick up daily instrument-master changes.
             if now()-started >= (ROTATE_SECONDS if len(keys)>LIMIT else 3600): break
     finally:
-        ws.close(); save_quotes(pending)
+        ws.close()
+        from .forward import observe_quotes
+        observe_quotes(samples)
+        save_quotes(pending)
     return (offset+LIMIT)%len(keys)
 
 

@@ -1,0 +1,10 @@
+'use client';
+import {useState} from 'react';
+import {Api,useLiveTable} from '../hooks/useLiveTable';
+import {useTradingDate} from '../hooks/useTradingDate';
+export default function DailySummary({api,symbol}:{api:Api;symbol?:string}){
+ const today=useTradingDate(),[selected,setSelected]=useState('');const day=selected||today;
+ const {data,error}=useLiveTable(api,'/dashboard?'+new URLSearchParams({date_from:day,date_to:day,...(symbol?{symbol}: {})}));const d=data?.today;
+ const cards=[['Long setups',d?.long,'Buy direction',''],['Short setups',d?.short,'Sell direction',''],['Successful',d?.wins,'Positive net return','positive'],['Failed',d?.losses,'Negative net return','negative'],['Not entered',d?.unfilled,'Entry window ended',''],['Open trades',d?.open,'Entered; no confirmed exit',''],['Waiting entry',d?.waiting_entry,'Entry not confirmed yet',''],['Missing / revised data',d?d.awaiting_data+d.unverifiable:undefined,'Not counted as wins or losses','']];
+ return <section className="daily-summary"><div className="section-title"><div><h2>{day===today?'Today’s trading activity':'Trading activity'}</h2><p>Setups issued on {day} · {symbol||'100 selected stocks'} · Simulated outcomes</p></div><label>Session date<input aria-label="Summary date" type="date" value={day} onChange={e=>setSelected(e.target.value)}/></label>{selected&&<button onClick={()=>setSelected('')}>Today</button>}</div>{error&&<p className="error">{error}</p>}<div className="daily-cards">{cards.map(([label,value,note,color])=><article className="daily-card" key={String(label)}><span>{label}</span><strong className={String(color)}>{value??'—'}</strong><small>{note}</small></article>)}</div><div className="summary-strip"><span>Resolved <b>{d?.closed??'—'}</b></span><span>Net win rate <b>{d?.net_win_rate==null?'—':(d.net_win_rate*100).toFixed(1)+'%'}</b></span><span>Breakeven <b>{d?.breakeven??'—'}</b></span><small>Long/short counts include unfilled setups. Success and failure use confirmed net returns, including time exits.</small></div></section>;
+}

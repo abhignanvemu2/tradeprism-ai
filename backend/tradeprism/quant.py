@@ -3,12 +3,15 @@ import math
 import numpy as np
 import pandas as pd
 
-FEATURES = ['return1','return5','return20','volatility','rsi','ema_distance','atr_fraction','volume_ratio','breakout_distance']
+FEATURES = ['return1','return5','return20','volatility','rsi','ema_distance','atr_fraction','volume_ratio','breakout_distance','support_distance','direction']
 HORIZON = 12
 ENTRY_DELAY = 1  # allow completion/polling before the first full future entry bar
-VERSION = 'long-breakout-v3-future-entry'
+VERSION = 'bidirectional-breakout-v4-window3-partitioned'
 
 def features(frame):
+    if 'segment' in frame and frame.segment.nunique()>1:
+        parts=[features(g.drop(columns='segment')).assign(segment=key) for key,g in frame.groupby('segment',sort=False)]
+        result=pd.concat(parts).sort_index(); result.attrs.update(frame.attrs); return result
     d = frame.copy()
     c = d.close
     d['return1'] = c.pct_change()
@@ -29,6 +32,8 @@ def features(frame):
     d['resistance'] = d.high.rolling(20).max()
     d['support'] = d.low.rolling(20).min()
     d['breakout_distance'] = d.resistance/c - 1
+    d['support_distance'] = c/d.support - 1
+    d['direction'] = 1.0
     d['sma20'] = c.rolling(20).mean()
     d['bb_upper'] = d.sma20 + 2*c.rolling(20).std()
     d['bb_lower'] = d.sma20 - 2*c.rolling(20).std()
@@ -38,51 +43,50 @@ def features(frame):
 def rounded(v, tick):
     return float((Decimal(str(v))/Decimal(str(tick))).quantize(Decimal('1'),rounding=ROUND_HALF_UP)*Decimal(str(tick)))
 
-def plan(row, tick):
-    entry = rounded(row.resistance + tick, tick)
-    return {'direction':'LONG','entry':entry,'stop':rounded(entry-1.5*row.atr,tick),'target':rounded(entry+3*row.atr,tick)}
+def plan(row, tick, direction='LONG'):
+    long=direction=='LONG'; sign=1 if long else -1
+    entry=rounded(row.resistance+tick if long else row.support-tick,tick)
+    return {'direction':direction,'entry':entry,'stop':rounded(entry-sign*1.5*row.atr,tick),'target':rounded(entry+sign*3*row.atr,tick)}
 
-def outcome(bars, p, cost_bps=15):
-    """Stop entry valid for first bar only. Gap above entry => unfilled.
+def outcome(bars,p,cost_bps=15):
+    from .execution import evaluate
+    if bars.empty:return None
+    rows=bars.to_dict('records')
+    # Keep the standalone helper usable for OHLC-only test fixtures.
+    for i,row in enumerate(rows):row.setdefault('time',i)
+    step=(rows[1]['time']-rows[0]['time']) if len(rows)>1 else 1
+    end=rows[-1]['time']+step
+    result=evaluate(rows,p,rows[0]['time'],end,step,end,cost_bps)
+    if result['event'] in ('unfilled','awaiting_data','waiting_entry'):return None
+    return {'label':int(result['event']=='target'),'event':result['event'],'net_return':result['net_return'],
+            'bars':int((result['event_time']-rows[0]['time'])/step),'exit':result['exit']}
 
-    Conservatively count a stop touched on entry bar even if sequencing is unknown.
-    Expiry is a non-success label, with its actual marked-to-market P&L.
-    """
-    first = bars.iloc[0]
-    if first.open > p['entry'] or first.high < p['entry']:
-        return None
-    for offset, (_, b) in enumerate(bars.iterrows()):
-        if b.low <= p['stop']:
-            price = min(p['stop'], b.open) if offset else p['stop']
-            event = 'stop'
-        elif b.high >= p['target']:
-            price, event = p['target'], 'target'
-        elif offset == len(bars)-1:
-            price, event = b.close, 'expired'
-        else:
-            continue
-        net = (price-p['entry'])/p['entry'] - cost_bps/10000 * (1+price/p['entry'])
-        return {'label':int(event=='target'), 'event':event, 'net_return':float(net), 'bars':offset+1,'exit':float(price)}
-
-def dataset(d, tick):
-    examples, unfilled = [], 0
-    for i in range(50,len(d)-HORIZON-ENTRY_DELAY):
-        row = d.iloc[i]
-        if 'session' in d.columns:
-            window=d.iloc[i:i+1+HORIZON+ENTRY_DELAY]
-            if window.session.nunique()!=1 or (window.time.diff().dropna()!=d.attrs.get('step')).any():
-                continue
-        if row[FEATURES].isna().any() or row.atr <= 0:
-            continue
-        p = plan(row,tick)
-        if p['stop']<=0 or not p['stop']<p['entry']<p['target']:
-            continue
-        out = outcome(d.iloc[i+1+ENTRY_DELAY:i+1+ENTRY_DELAY+HORIZON],p)
-        if out is None:
-            unfilled += 1
-            continue
-        examples.append({'index':i,'time':float(row.time), 'label_end':i+HORIZON+ENTRY_DELAY, 'entry_delay':ENTRY_DELAY, 'x':row[FEATURES].to_numpy(dtype=float), **out})
-    return examples, unfilled
+def dataset(d,tick):
+    examples,unfilled=[],0
+    for i in range(50,len(d)-1-ENTRY_DELAY):
+        row=d.iloc[i]
+        end=min(len(d),i+1+ENTRY_DELAY+HORIZON)
+        if 'session' in d:
+            while end>i+1+ENTRY_DELAY and d.iloc[end-1].session!=row.session:end-=1
+        if end<=i+1+ENTRY_DELAY:continue
+        window=d.iloc[i:end]
+        if 'segment' in d and window.segment.nunique()!=1:continue
+        if 'session' in d and (window.time.diff().dropna()!=d.attrs.get('step')).any():continue
+        # Require the full horizon unless the final candle closes the exchange session.
+        if end<i+1+ENTRY_DELAY+HORIZON:
+            import pandas as pd
+            close=pd.Timestamp(d.iloc[end-1].time,unit='s',tz='UTC').tz_convert('Asia/Kolkata')
+            if close.hour*60+close.minute+int(d.attrs.get('step',0)/60)!=930:continue
+        if row[FEATURES].isna().any() or row.atr<=0:continue
+        for direction in ('LONG','SHORT'):
+            p=plan(row,tick,direction)
+            if min(p['entry'],p['stop'],p['target'])<=0:continue
+            out=outcome(d.iloc[i+1+ENTRY_DELAY:end],p)
+            if out is None:unfilled+=1;continue
+            x=row[FEATURES].copy();x['direction']=1 if direction=='LONG' else -1
+            examples.append({'index':i,'time':float(row.time),'direction':direction,'label_end':end-1,
+                'entry_delay':ENTRY_DELAY,'x':x.to_numpy(dtype=float),**out})
+    return examples,unfilled
 
 def risk(entry, stop, target, direction, equity, risk_pct, tick, lot, cost_bps=15, fx=1, multiplier=1):
     numbers = [entry,stop,target,equity,risk_pct,tick,lot,cost_bps,fx,multiplier]

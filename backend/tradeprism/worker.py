@@ -7,7 +7,7 @@ from .quant import features
 from .ml import train
 
 def run_one():
-    with session() as s:
+    with session(write=True) as s:
         job=s.scalar(select(Job).where(Job.status=='queued').order_by(Job.created).limit(1))
         if not job: return False
         claimed=s.execute(update(Job).where(Job.id==job.id,Job.status=='queued').values(status='running',updated=now(),detail='Worker running')).rowcount
@@ -16,6 +16,8 @@ def run_one():
     try:
         from .universe import load_registry
         load_registry()
+        from .scope import supported
+        if not supported(symbol,tf):raise ValueError('Outside selected 100-stock / 5m / 15m scope')
         if kind=='ingest':
             result=ingest(symbol,tf)
             detail=f"Stored {result['count']} genuine completed candles from {result['source']}"
@@ -23,16 +25,15 @@ def run_one():
             if kind in ('prepare','reconcile'): ingest(symbol,tf,10000,reconcile=kind=='reconcile')
             meta=metadata(symbol,tf)
             if not meta: raise ValueError('Market data unavailable; fetch genuine history first.')
-            if meta.get('missing_intervals'): raise ValueError('Historical gaps must be reconciled before training.')
             from .training import research_frame
             frame=research_frame(bars(symbol,tf),meta,tf)
             result=train(features(frame),symbol,tf,meta['tick'],meta)
-            with session() as s:
+            with session(write=True) as s:
                 from .db import Record
                 if not s.get(Record,result['version']): append(s,'model','system',symbol,result,result['version'])
             if kind=='auto_train':
                 from .db import ResearchState, ChartTrack
-                with session() as s:
+                with session(write=True) as s:
                     state=s.get(ResearchState,symbol) if tf=='15m' else s.get(ChartTrack,f'{symbol}:{tf}')
                     if state: state.trained_bar=meta['last']
                 from .continuous import cache_analysis
@@ -47,7 +48,7 @@ def run_one():
         detail='Worker failed; inspect local service logs. No fabricated result was produced.'; status='failed'
         import traceback
         traceback.print_exc()
-    with session() as s:
+    with session(write=True) as s:
         job=s.get(Job,jid); job.status=status; job.detail=detail; job.updated=now()
         if kind=='auto_train':
             from .db import ResearchState, ChartTrack
@@ -58,7 +59,7 @@ def run_one():
 def main():
     init()
     # One worker per deployment. Interrupted jobs are explicitly failed, never silently retried.
-    with session() as s:
+    with session(write=True) as s:
         for job in s.scalars(select(Job).where(Job.status=='running')):
             job.status='failed'; job.detail='Worker interrupted. Requeue after inspecting the previous run.'; job.updated=now()
     while True:

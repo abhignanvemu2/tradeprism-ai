@@ -35,10 +35,11 @@ def test_feature_prefix_does_not_see_future():
     after=features(d)[FEATURES].iloc[99]
     np.testing.assert_allclose(before,after)
 
-def test_same_bar_stop_wins_and_gap_entry_unfilled():
+def test_same_bar_stop_wins_and_gap_entry_uses_open():
     p={'entry':100,'stop':95,'target':110}
     assert outcome(pd.DataFrame([{'open':99,'low':94,'high':112,'close':105}]),p)['event']=='stop'
-    assert outcome(pd.DataFrame([{'open':102,'low':99,'high':112,'close':105}]),p) is None
+    result=outcome(pd.DataFrame([{'open':102,'low':99,'high':112,'close':105}]),p)
+    assert result['event']=='target' and result['net_return']<.08
 
 def test_expiry_is_failure_with_actual_pnl():
     result=outcome(pd.DataFrame([{'open':99,'low':98,'high':105,'close':103}]),{'entry':100,'stop':95,'target':110})

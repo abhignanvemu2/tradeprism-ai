@@ -26,7 +26,9 @@ def instrument(symbol):
             _MASTER=(time.time(),json.loads(content))
         except (httpx.HTTPError,ValueError,OSError) as e:
             raise DataUnavailable('Upstox instrument master unavailable; no guessed instrument metadata used.') from e
-    matches=[i for i in _MASTER[1] if i.get('trading_symbol')==symbol and i.get('segment')=='NSE_EQ' and i.get('instrument_type')=='EQ']
+    from .scope import ALIASES, SYMBOLS
+    if symbol not in SYMBOLS: raise DataUnavailable('Stock is outside the selected 100-stock universe')
+    matches=[i for i in _MASTER[1] if i.get('trading_symbol')==ALIASES.get(symbol,symbol) and i.get('segment')=='NSE_EQ' and i.get('instrument_type')=='EQ']
     if len(matches)!=1:raise DataUnavailable('Instrument is missing or ambiguous in the Upstox master.')
     return matches[0]
 
@@ -50,16 +52,16 @@ def fetch_upstox(symbol,tf,count,request,validate):
     # Iterate within provider windows, stopping at the supported history boundary.
     earliest=datetime(2000 if tf=='1d' else 2022,1,1).date()
     chunk=365 if tf=='1d' else 28
-    rows=[]
+    current=request(f'{root}/intraday/{key}/{unit}/{interval}',headers)
+    rows=[[timestamp(c[0]),*c[1:6]] for c in current['data']['candles'] if complete(timestamp(c[0]),tf,time.time())]
     for _ in range(240):
+        if len(rows)>=count:break
         left=max(earliest,cursor-timedelta(days=chunk-1))
         response=request(f'{root}/{key}/{unit}/{interval}/{cursor}/{left}',headers)
         rows.extend([timestamp(c[0]),*c[1:6]] for c in response['data']['candles'])
         if len(rows)>=count or left<=earliest:break
         cursor=left-timedelta(days=1)
         time.sleep(.25)
-    current=request(f'{root}/intraday/{key}/{unit}/{interval}',headers)
-    rows.extend([timestamp(c[0]),*c[1:6]] for c in current['data']['candles'])
     stamp=time.time()
     rows=validate([r for r in rows if complete(r[0],tf,stamp)],stamp)[-count:]
     if not rows:raise DataUnavailable('Upstox returned no completed candles.')

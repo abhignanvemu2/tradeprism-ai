@@ -14,4 +14,4 @@ async function proxy(request:NextRequest, context:{params:Promise<{path:string[]
     return Response.json({detail:timedOut?'Backend response timed out. Check the API terminal for a blocked request or database lock.':'Cannot connect to the backend API. Run start.bat and inspect the API startup error; check http://127.0.0.1:8000/health.'},{status:timedOut?504:503});
   }
 }
-export {proxy as GET,proxy as POST,proxy as PUT};
+export {proxy as GET,proxy as POST,proxy as PUT,proxy as DELETE};

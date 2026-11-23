@@ -14,3 +14,9 @@ def clean_db():
     Base.metadata.drop_all(engine)
     init()
     yield
+
+@pytest.fixture(scope='session', autouse=True)
+def close_database_before_temp_cleanup():
+    yield
+    engine.dispose()
+    ROOT.cleanup()

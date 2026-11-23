@@ -36,38 +36,43 @@ def test_provider_failure_job_records_error_not_fake_data(monkeypatch):
     from tradeprism.providers import DataUnavailable
     def fail(*args,**kwargs):raise DataUnavailable('Provider unavailable')
     monkeypatch.setattr('tradeprism.worker.ingest',fail)
-    client.post('/jobs',headers=ALICE,json={'kind':'ingest','symbol':'BTC-USD'})
+    client.post('/jobs',headers=ALICE,json={'kind':'ingest','symbol':'AXISBANK'})
     assert run_one()
     job=client.get('/jobs',headers=ALICE).json()[0]
     assert job['status']=='failed' and job['detail']=='Provider unavailable'
-    assert client.get('/analysis/BTC-USD',headers=ALICE).json()['candles']==[]
+    assert client.get('/analysis/AXISBANK',headers=ALICE).json()['candles']==[]
 
 def test_job_deduplication():
-    payload={'kind':'ingest','symbol':'BTC-USD'}
+    payload={'kind':'ingest','symbol':'AXISBANK'}
     a=client.post('/jobs',headers=ALICE,json=payload).json()
     b=client.post('/jobs',headers=ALICE,json=payload).json()
     assert a['id']==b['id']
 
 def test_local_explanation_reports_missing_evidence():
-    r=client.post('/explain',headers=ALICE,json={'symbol':'BTC-USD','question':'Explain'})
+    r=client.post('/explain',headers=ALICE,json={'symbol':'AXISBANK','question':'Explain'})
     assert r.status_code==200
     assert r.json()['engine']=='deterministic-local-v1'
     assert 'unavailable' in r.json()['summary'].lower()
 
 def add_candle(s,t,o=99,h=101,l=98,c=100):
-    s.add(Candle(symbol='BTC-USD',timeframe='1h',time=t,open=o,high=h,low=l,close=c,volume=100,source='isolated_test_fixture',fetched_at=now()))
+    s.add(Candle(symbol='AXISBANK',timeframe='15m',time=t,open=o,high=h,low=l,close=c,volume=100,source='isolated_test_fixture',fetched_at=now()))
 
 def test_replay_hides_future_candles_and_prediction():
+    from datetime import datetime,timedelta
+    from zoneinfo import ZoneInfo
+    start=datetime(2026,11,2,9,15,tzinfo=ZoneInfo('Asia/Kolkata'))
+    times=[(start+timedelta(days=i//25,minutes=15*(i%25))).timestamp() for i in range(100)]
     with session() as s:
-        for t in range(100):add_candle(s,t*3600)
-    a=analyze('BTC-USD','1h',until=70*3600)
-    assert len(a['candles'])==71 and a['window_end']==70*3600
+        for t in times:add_candle(s,t)
+    a=analyze('AXISBANK','15m',until=times[70])
+    assert len(a['candles'])==71 and a['window_end']==times[70]
     assert 'prediction' not in a and a['replay']
+
 
 def test_paper_forward_only_and_idempotent():
     created=10000
     with session() as s:
-        append(s,'paper','alice','BTC-USD',{'owner':'alice','timeframe':'1h','created':created,'direction':'LONG','entry':100,'stop':95,'target':110,'quantity':2,'cost_bps_per_side':15,'fx':1,'multiplier':1,'entry_deadline':20000,'exit_deadline':80000},'paper-test')
+        append(s,'paper','alice','AXISBANK',{'owner':'alice','timeframe':'15m','created':created,'direction':'LONG','entry':100,'stop':95,'target':110,'quantity':2,'cost_bps_per_side':15,'fx':1,'multiplier':1,'entry_deadline':20000,'exit_deadline':80000},'paper-test')
         # This bar precedes scenario creation and must never fill it.
         add_candle(s,9000,h=120,l=90)
         add_candle(s,11000,h=101,l=98)

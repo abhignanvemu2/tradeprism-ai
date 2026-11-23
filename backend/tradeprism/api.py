@@ -4,6 +4,8 @@ import json
 import os
 import threading
 import uuid
+from datetime import date
+from .scope import SYMBOLS, TIMEFRAMES
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 import httpx
@@ -31,24 +33,27 @@ def auth(authorization: str=Header(default='')):
 
 @asynccontextmanager
 async def lifespan(app):
-    init(); yield
+    init()
+    from .universe import enforce_scope
+    enforce_scope()
+    yield
 
 app=FastAPI(title='TradePrism AI',version='0.1.0',lifespan=lifespan)
 
 def valid(symbol,tf):
     from .universe import load_registry
     load_registry()
-    if symbol not in REGISTRY or tf not in SECONDS: raise HTTPException(422,'Unsupported instrument or timeframe')
+    if symbol not in SYMBOLS or tf not in TIMEFRAMES: raise HTTPException(422,'Unsupported instrument or timeframe')
 
 class Task(BaseModel):
     kind: str
     symbol: str
-    timeframe: str='1h'
+    timeframe: str='15m'
 
 class Scenario(BaseModel):
     model_config=ConfigDict(allow_inf_nan=False)
     symbol: str
-    timeframe: str='1h'
+    timeframe: str='15m'
     direction: str='LONG'
     entry: float
     stop: float
@@ -65,7 +70,7 @@ class DrawingState(BaseModel):
 
 class Explain(BaseModel):
     symbol: str
-    timeframe: str='1h'
+    timeframe: str='15m'
     question: str=Field(max_length=1000)
 
 @app.get('/health')
@@ -75,16 +80,16 @@ def health(): return {'service':'TradePrism','state':'running','real_order_place
 def instruments(owner=Depends(auth)):
     from .universe import load_registry
     load_registry()
-    return [{'symbol':s,**m,'timeframes':list(SECONDS)} for s,m in REGISTRY.items() if m['asset']=='equity']
+    return [{'symbol':s,**m,'timeframes':list(TIMEFRAMES)} for s,m in REGISTRY.items() if m['asset']=='equity']
 
 @app.get('/analysis/{symbol}')
-def analysis(symbol:str,timeframe:str='1h',until:float|None=None,owner=Depends(auth)):
+def analysis(symbol:str,timeframe:str='15m',until:float|None=None,owner=Depends(auth)):
     valid(symbol,timeframe)
     if until is not None and (until<=0 or until>now()): raise HTTPException(422,'Invalid replay time')
     return analyze(symbol,timeframe,until)
 
 @app.post('/signals/{symbol}')
-def snapshot(symbol:str,timeframe:str='1h',owner=Depends(auth)):
+def snapshot(symbol:str,timeframe:str='15m',owner=Depends(auth)):
     valid(symbol,timeframe); result=analyze(symbol,timeframe)
     result.pop('candles',None); result.pop('overlays',None)
     with session() as s: identifier=append(s,'signal',owner,symbol,result)
@@ -109,7 +114,7 @@ def focus(p:Focus,owner=Depends(auth)):
 
 @app.get('/stocks')
 def stocks(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),search:str=Query('',max_length=100),
-    timeframe:str=Query('15m',pattern='^(1m|5m|15m)$'),period:str=Query('all',pattern='^(all|today|week)$'),
+    timeframe:str=Query('15m',pattern='^(5m|15m)$'),period:str=Query('all',pattern='^(all|today|week)$'),
     sort:str=Query('win_rate',pattern='^(win_rate|change|price|symbol|closed)$'),direction:str=Query('desc',pattern='^(asc|desc)$'),
     minimum:int=Query(0,ge=0),owner=Depends(auth)):
     from .tables import stock_table
@@ -117,29 +122,23 @@ def stocks(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),search:str=Q
 
 @app.get('/activity')
 def activity(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),search:str=Query('',max_length=100),
-    state:str=Query('all',pattern='^(all|queued|running|completed|failed)$'),owner=Depends(auth)):
+    state:str=Query('all',pattern='^(all|queued|running|completed|failed|cancelled)$'),owner=Depends(auth)):
     from .tables import activity_table
     return activity_table(offset,limit,search,state)
 
 @app.get('/dashboard')
-def dashboard(owner=Depends(auth)):
-    from .forward import dashboard as summary
-    return summary()
+def dashboard(date_from:date|None=None,date_to:date|None=None,symbol:str|None=None,owner=Depends(auth)):
+    from .ledger import summary
+    try:return summary(date_from,date_to,symbol)
+    except ValueError as e:raise HTTPException(422,str(e))
 
 @app.get('/forecasts')
-def forecast_history(offset:int=Query(0,ge=0),limit:int=Query(100,ge=1,le=200),symbol:str|None=None,owner=Depends(auth)):
-    from .db import Forecast, ForecastResult
-    with session() as s:
-        query=select(Forecast,ForecastResult).outerjoin(ForecastResult,ForecastResult.id==Forecast.id)
-        if symbol: query=query.where(Forecast.symbol==symbol)
-        rows=s.execute(query.order_by(Forecast.created.desc(),Forecast.id).offset(offset).limit(limit)).all()
-        count=select(func.count()).select_from(Forecast)
-        if symbol: count=count.where(Forecast.symbol==symbol)
-        total=s.scalar(count)
-        return {'total':total,'offset':offset,'limit':limit,'records':[{'id':f.id,'symbol':f.symbol,'timeframe':f.timeframe,
-            'issued_at':f.created,'entry_time':f.entry_time,'end_time':f.end_time,'probability':f.probability,
-            'qualified':bool(f.qualified),'forecast':json.loads(f.body),'outcome':json.loads(r.body) if r else None,
-            'net_return':r.net_return if r else None} for f,r in rows]}
+def forecast_history(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),symbol:str|None=None,
+    date_from:date|None=None,date_to:date|None=None,
+    position:str|None=Query(None,pattern='^(LONG|SHORT)$'),timeframe:str|None=Query(None,pattern='^(5m|15m)$'),owner=Depends(auth)):
+    from .ledger import history
+    try:return history(offset,limit,symbol,date_from,date_to,position,timeframe)
+    except ValueError as e:raise HTTPException(422,str(e))
 
 @app.get('/monitor')
 def monitor(owner=Depends(auth)):
@@ -152,47 +151,24 @@ def monitor(owner=Depends(auth)):
         fresh=s.scalar(select(func.count()).select_from(LiveQuote).join(Instrument,Instrument.symbol==LiveQuote.symbol).where(LiveQuote.received>now()-30,LiveQuote.trade_time>now()-60))
         pending=s.scalar(select(func.count()).select_from(Job).where(Job.status.in_(['queued','running'])))
         coverage=[{'timeframe':'15m','histories':collected,'trained':trained}]
-        for tf in ('1m','5m','1h','1d'):
+        for tf in ('5m',):
             histories=s.scalar(select(func.count()).select_from(ChartTrack).join(Instrument,Instrument.symbol==ChartTrack.symbol).where(ChartTrack.timeframe==tf,ChartTrack.last_bar>0))
             models=s.scalar(select(func.count()).select_from(ChartTrack).join(Instrument,Instrument.symbol==ChartTrack.symbol).where(ChartTrack.timeframe==tf,ChartTrack.trained_bar>0))
             coverage.append({'timeframe':tf,'histories':histories,'trained':models})
     return {'coverage':coverage,'universe':total,'histories':sum(x['histories'] for x in coverage),'auto_trained':sum(x['trained'] for x in coverage),'recent_trades':fresh,'pending_jobs':pending,
-        'feed':status('feed'),'collector':status('collector'),'discovery':status('universe'),
-        'timeframes':['1m','5m','15m','1h','1d'],'training':'Automatic 1m/5m/15m batch retraining after new completed outcomes; not tick-by-tick learning',
-        'coverage_note':'All discovered NSE/BSE EQ histories queued. Streaming rotates above 5000; not simultaneous full-market chart analysis.'}
+        'feed':status('feed'),'collector':status('collector'),'outcomes':status('outcomes'),'discovery':status('universe'),
+        'timeframes':list(TIMEFRAMES),'training':'Automatic 5m/15m batch retraining after new completed outcomes; not tick-by-tick learning',
+        'coverage_note':'Only the selected 100 NSE stocks. Long/short research on 5m and 15m; live observations and completed-candle confirmation are shown separately.'}
 
 @app.get('/quotes/{symbol}')
 def quote(symbol:str,owner=Depends(auth)):
     from .db import LiveQuote
+    valid(symbol,'5m')
     with session() as s:
         q=s.get(LiveQuote,symbol)
         if not q: return {'symbol':symbol,'state':'No streamed price yet'}
         return {'symbol':symbol,'price':q.price,'previous_close':q.previous_close,'trade_time':q.trade_time,
             'received':q.received,'state':'Recent trade' if now()-q.received<30 and now()-q.trade_time<60 else 'Last known trade — stale or market closed'}
-
-@app.get('/scanner')
-def scanner(timeframe:str='15m',offset:int=Query(0,ge=0),limit:int=Query(50,ge=1,le=100),search:str=Query('',max_length=80),owner=Depends(auth)):
-    from .db import Instrument, ResearchState, LiveQuote
-    with session() as s:
-        query=select(Instrument)
-        if search: query=query.where(Instrument.symbol.contains(search.upper(),autoescape=True))
-        total=s.scalar(select(func.count()).select_from(query.subquery()))
-        instruments=list(s.scalars(query.order_by(Instrument.symbol).offset(offset).limit(limit)))
-        results=[]
-        for inst in instruments:
-            state=s.get(ResearchState,inst.symbol); q=s.get(LiveQuote,inst.symbol)
-            a=json.loads(state.analysis) if state and timeframe=='15m' else {}
-            # Cached analysis must not keep a WATCH badge after a feed outage.
-            if now()-a.get('data_timestamp',0)>2700: a.update(decision='NO TRADE',state='Historical or unavailable chart data')
-            results.append({**a,'symbol':inst.symbol,'source':'upstox','decision':a.get('decision','NO TRADE'),
-                'state':a.get('state',state.detail if state else 'Waiting for history'),
-                'price':q.price if q else None,'quote_time':q.trade_time if q else None,
-                'quote_fresh':bool(q and now()-q.received<30 and now()-q.trade_time<60),
-                'training_detail':state.detail if state else 'Waiting for discovery',
-                'analysis_time':a.get('generated_at')})
-    return {'configured':total,'offset':offset,'limit':limit,'analyzed':sum('indicators' in x for x in results),
-        'unavailable':sum('indicators' not in x for x in results),'actionable':0,'results':results,
-        'state':'Live prices; automatic 15m research coverage depends on collection and training backlog'}
 
 @app.post('/jobs',status_code=202)
 def enqueue(task:Task,owner=Depends(auth)):
@@ -233,7 +209,7 @@ def save_plan(p:Scenario,owner=Depends(auth)):
 @app.post('/paper',status_code=201)
 def create_paper(p:Scenario,owner=Depends(auth)):
     result=calculate(p); meta=metadata(p.symbol,p.timeframe)
-    if p.direction=='SHORT' and not meta.get('short_allowed'): raise HTTPException(422,'Shorting is not supported for this configured instrument.')
+    if p.direction=='SHORT' and not (meta.get('short_allowed') or (p.symbol in SYMBOLS and p.timeframe in TIMEFRAMES)): raise HTTPException(422,'Shorting is not supported for this configured instrument.')
     if meta.get('missing_intervals'): raise HTTPException(409,'Historical gaps must be reconciled before starting a paper scenario.')
     a=analyze(p.symbol,p.timeframe)
     if a['state']!='Completed historical candles — polling': raise HTTPException(409,'Fresh genuine data required for paper scenarios.')
@@ -253,18 +229,24 @@ def history(kind:str,owner=Depends(auth)):
     return records(kind,owner=owner)
 
 @app.get('/models')
-def models(owner=Depends(auth)): return records('model')
+def models(owner=Depends(auth)):
+    seen=set(); result=[]
+    for row in records('model',limit=10000):
+        identity=(row['symbol'],row.get('timeframe'))
+        if identity[0] in SYMBOLS and identity[1] in TIMEFRAMES and identity not in seen:
+            result.append(row); seen.add(identity)
+    return result
 
 @app.get('/workspace/{symbol}')
 def workspace(symbol:str,owner=Depends(auth)):
-    valid(symbol,'1h')
+    valid(symbol,'15m')
     with session() as s:
         row=s.get(Workspace,f'{owner}:{symbol}')
         return json.loads(row.body) if row else {'drawings':[],'settings':{}}
 
 @app.put('/workspace/{symbol}')
 def save_workspace(symbol:str,p:DrawingState,owner=Depends(auth)):
-    valid(symbol,'1h'); body=p.model_dump_json()
+    valid(symbol,'15m'); body=p.model_dump_json()
     if len(body)>100000: raise HTTPException(413,'Workspace exceeds 100 KB')
     with session() as s:
         key=f'{owner}:{symbol}'; row=s.get(Workspace,key)
@@ -283,11 +265,11 @@ def explain(p:Explain,owner=Depends(auth)):
 @app.get('/favorites')
 def favorites(owner=Depends(auth)):
     with session() as s:
-        return list(s.scalars(select(Favorite.symbol).where(Favorite.owner==owner).order_by(Favorite.symbol)))
+        return list(s.scalars(select(Favorite.symbol).where(Favorite.owner==owner,Favorite.symbol.in_(SYMBOLS)).order_by(Favorite.symbol)))
 
 @app.put('/favorites/{symbol}')
 def add_favorite(symbol:str,owner=Depends(auth)):
-    valid(symbol,'1h')
+    valid(symbol,'15m')
     from sqlalchemy.exc import IntegrityError
     try:
         with session() as s:

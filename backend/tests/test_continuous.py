@@ -6,7 +6,7 @@ from tradeprism.live import decode, window, save_quotes
 from tradeprism.proto.MarketDataFeed_pb2 import FeedResponse
 
 
-def seed(symbol='TEST',last=100000):
+def seed(symbol='AXISBANK',last=100000):
     with session() as s:
         s.add(Instrument(symbol=symbol,body=json.dumps({'instrument_key':'NSE_EQ|'+symbol,'segment':'NSE_EQ','name':symbol})))
         s.add(ResearchState(symbol=symbol,last_bar=last))
@@ -22,15 +22,15 @@ def test_scheduling_deduplicates_and_requires_new_outcomes():
     schedule_training()
     with session() as s:
         assert len(list(s.scalars(select(Job))))==1
-        s.get(ResearchState,'TEST').last_bar+=HORIZON*STEP
+        s.get(ResearchState,'AXISBANK').last_bar+=HORIZON*STEP
         for i in range(1,HORIZON+1):
-            s.add(Candle(symbol='TEST',timeframe='15m',time=100000+i*STEP,open=100,high=101,low=99,close=100,volume=1,source='test',fetched_at=now()))
+            s.add(Candle(symbol='AXISBANK',timeframe='15m',time=100000+i*STEP,open=100,high=101,low=99,close=100,volume=1,source='test',fetched_at=now()))
     schedule_training()
     with session() as s: assert len(list(s.scalars(select(Job))))==2
 
 
 def test_queue_bound_and_retired_symbol_exclusion():
-    for i in range(25): seed(f'T{i}')
+    for i in range(25): seed(__import__('tradeprism.scope',fromlist=['SYMBOLS']).SYMBOLS[i])
     with session() as s: s.add(ResearchState(symbol='RETIRED',last_bar=100000))
     schedule_training()
     with session() as s:
@@ -54,24 +54,24 @@ def test_decode_real_wire_format_and_reject_future_invalid_unknown():
     q.ltp=123; q.cp=120; q.ltt=int(stamp*1000)
     msg.feeds['UNKNOWN'].ltpc.CopyFrom(q)
     msg.marketInfo.segmentStatus['NSE_EQ']=2
-    result,segments=decode(msg.SerializeToString(),{'NSE_EQ|TEST':'TEST'},stamp)
-    assert list(result)==['TEST'] and result['TEST']['price']==123
+    result,segments=decode(msg.SerializeToString(),{'NSE_EQ|TEST':'AXISBANK'},stamp)
+    assert list(result)==['AXISBANK'] and result['AXISBANK']['price']==123
     assert segments['NSE_EQ']==2
     q.ltt=int((stamp+120)*1000)
-    assert decode(msg.SerializeToString(),{'NSE_EQ|TEST':'TEST'},stamp)[0]=={}
+    assert decode(msg.SerializeToString(),{'NSE_EQ|TEST':'AXISBANK'},stamp)[0]=={}
     q.ltt=int(stamp*1000); q.ltp=float('nan')
-    assert decode(msg.SerializeToString(),{'NSE_EQ|TEST':'TEST'},stamp)[0]=={}
+    assert decode(msg.SerializeToString(),{'NSE_EQ|TEST':'AXISBANK'},stamp)[0]=={}
 
 
 def test_out_of_order_ticks_never_rewind_last_trade():
-    save_quotes({'TEST':{'price':100,'previous_close':99,'trade_time':100,'received':101}})
-    save_quotes({'TEST':{'price':90,'previous_close':99,'trade_time':99,'received':102}})
-    with session() as s: assert s.get(LiveQuote,'TEST').price==100
+    save_quotes({'AXISBANK':{'price':100,'previous_close':99,'trade_time':100,'received':101}})
+    save_quotes({'AXISBANK':{'price':90,'previous_close':99,'trade_time':99,'received':102}})
+    with session() as s: assert s.get(LiveQuote,'AXISBANK').price==100
 
 
 def test_collector_alternates_bootstrap_and_refresh(monkeypatch):
     import tradeprism.continuous as c
-    seed('EXISTING',last=now()-900); seed('NEW',last=0)
+    seed('HDFCBANK',last=now()-900); seed('ICICIBANK',last=0)
     monkeypatch.setattr(c,'_COLLECTION_TURN',0)
     calls=[]
     def ingest(symbol,tf,count):
@@ -79,23 +79,21 @@ def test_collector_alternates_bootstrap_and_refresh(monkeypatch):
     monkeypatch.setattr(c,'ingest',ingest)
     monkeypatch.setattr(c,'cache_analysis',lambda s:None)
     collect_one(); collect_one()
-    assert calls[0][0]=='EXISTING' and calls[1]==('NEW',10000)
+    assert calls[0][0]=='HDFCBANK' and calls[1]==('ICICIBANK',10000)
 
 
-def test_scanner_auth_pagination_and_stale_quotes():
+def test_stock_table_replaces_scanner_with_auth_and_freshness():
     from fastapi.testclient import TestClient
     from tradeprism.api import app
-    seed('TESTA');seed('TESTB')
-    save_quotes({'TESTA':{'price':100,'previous_close':99,'trade_time':1,'received':now()}})
-    client=TestClient(app)
+    seed('AXISBANK');seed('HDFCBANK')
+    save_quotes({'AXISBANK':{'price':100,'previous_close':99,'trade_time':1,'received':now()}})
+    client=TestClient(app);headers={'Authorization':'Bearer test-alice-key-at-least-24-chars'}
     assert client.get('/monitor').status_code==401
-    headers={'Authorization':'Bearer test-alice-key-at-least-24-chars'}
-    r=client.get('/scanner?limit=1&search=TEST',headers=headers).json()
-    assert r['configured']==2 and len(r['results'])==1
-    assert r['results'][0]['quote_fresh'] is False
-    assert r['results'][0]['decision']=='NO TRADE'
-    assert client.get('/scanner?limit=1000',headers=headers).status_code==422
-    assert client.get('/monitor',headers=headers).json()['universe']==2
+    assert client.get('/scanner',headers=headers).status_code==404
+    r=client.get('/stocks?limit=1&search=BANK',headers=headers).json()
+    assert r['total']==2 and len(r['records'])==1
+    assert r['records'][0]['quote_fresh'] is False
+    assert client.get('/stocks?limit=1000',headers=headers).status_code==422
 
 
 def test_elapsed_weekend_does_not_count_as_new_training_bars():
@@ -103,7 +101,7 @@ def test_elapsed_weekend_does_not_count_as_new_training_bars():
     schedule_training()
     with session() as s:
         s.scalar(select(Job)).status='completed'
-        s.get(ResearchState,'TEST').last_bar+=3*86400
+        s.get(ResearchState,'AXISBANK').last_bar+=3*86400
     schedule_training()
     with session() as s: assert len(list(s.scalars(select(Job))))==1
 

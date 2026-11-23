@@ -29,11 +29,19 @@ def test_adapter_paise_normalization_and_real_response_mapping(monkeypatch):
     assert rows[0][1:]==[100,102,99,101,200]
     assert len(calls)==2 and '%7C' in calls[0]
 
-def test_equity_training_blocks_unsupported_horizon_and_discontinuity():
-    d=frame()
+def test_equity_training_blocks_unsupported_horizon_and_partitions_discontinuity():
+    from datetime import timedelta
+    d=frame();start=datetime(2026,11,2,9,15,tzinfo=IST)
+    d['time']=[(start+timedelta(days=i//25,minutes=(i%25)*15)).timestamp() for i in range(len(d))]
     with pytest.raises(ValueError,match='15m'):research_frame(d,{'asset':'equity'},'1h')
-    d.loc[10,'open']=10000
-    with pytest.raises(ValueError,match='discontinuity'):research_frame(d,{'asset':'equity'},'15m')
+    d.loc[50:,['open','high','low','close']]*=.5
+    result=research_frame(d,{'asset':'equity'},'15m')
+    assert result.segment.nunique()==2
+    assert result.attrs['discontinuities'][0]['possible_split_or_bonus']
+    f=features(result)
+    assert f.iloc[50].return1!=f.iloc[50].return1  # warm-up reset, not a fake -50% return
+    assert not any(r['index']<50<=r['label_end'] for r in dataset(f,.01)[0])
+
 
 def test_training_labels_do_not_cross_session():
     d=features(frame(200));d['session']=[str(i//25) for i in range(200)];d.attrs['step']=3600
