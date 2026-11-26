@@ -93,3 +93,11 @@ Authenticated Upstox streaming needs your local token and cannot be verified wit
 References: [Upstox instruments](https://upstox.com/developer/api-documentation/instruments/), [V3 history](https://upstox.com/developer/api-documentation/v3/get-historical-candle-data/), [V3 intraday](https://upstox.com/developer/api-documentation/v3/get-intra-day-candle-data/), [analytics token](https://upstox.com/developer/api-documentation/analytics-token/), [NSE ZOMATO rename](https://nsearchives.nseindia.com/content/circulars/CML67420.pdf), [NSE LTIM rename](https://nsearchives.nseindia.com/content/circulars/CML72948.pdf).
 
 This README supersedes older strategy/coverage documents under `docs/`. Lightweight Charts attribution remains enabled.
+
+## Analysis charts
+
+Open **Analysis** in the sidebar (`/analysis`). This page contains charts and filters, not a forecast table. It refreshes every 15 seconds while open. Choose today, yesterday, this week (Monday onward), last 7/30 calendar days, this month, all time or custom inclusive dates. Dates group forecasts by their **issue date in Asia/Kolkata**, not their exit date. Daily/weekly/monthly buckets show periods containing matching forecasts.
+
+All charts share stock, Long/Short, 5m/15m, outcome and quality-check filters. Search the stock selector or click a stock name in the stock-outcomes chart to drill down. Stock workspace pages also link directly to their analysis. Clear the stock filter to return to all stocks. Counts cover the entire matching ledger, not just one page of records; only aggregate counts are sent to the browser.
+
+Charts show outcome distribution, forecasts versus entered/closed trades, outcomes over time, Long/Short outcomes, recorded win rate and outcomes by stock. Entered includes closed trades: these are overlapping counts. Success/failure follows positive/negative net paper returns after assumed costs; breakeven is separate. Win rate is successes divided by closed trades (including breakeven); unentered, unresolved and unverifiable records are excluded. The charts cover automated forecasts, not manual journal scenarios. An empty selection shows no data, never a fabricated zero-percent win rate. A refresh error identifies previously loaded charts as stale.

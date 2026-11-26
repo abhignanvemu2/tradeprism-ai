@@ -140,6 +140,16 @@ def forecast_history(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),sy
     try:return history(offset,limit,symbol,date_from,date_to,position,timeframe)
     except ValueError as e:raise HTTPException(422,str(e))
 
+@app.get('/analytics')
+def analytics(date_from:date|None=None,date_to:date|None=None,symbol:str|None=None,
+    position:str|None=Query(None,pattern='^(LONG|SHORT)$'),timeframe:str|None=Query(None,pattern='^(5m|15m)$'),
+    period:str=Query('range',pattern='^(range|all)$'),group:str=Query('day',pattern='^(day|week|month)$'),
+    status:str|None=Query(None,pattern='^(success|failed|breakeven|open|waiting_entry|not_entered|awaiting_data|unverifiable)$'),
+    qualified:bool|None=None,owner=Depends(auth)):
+    from .analytics import charts
+    try:return charts(date_from,date_to,symbol,position,timeframe,period,group,status,qualified)
+    except ValueError as e:raise HTTPException(422,str(e))
+
 @app.get('/monitor')
 def monitor(owner=Depends(auth)):
     from .db import Instrument, ResearchState, LiveQuote, ChartTrack
