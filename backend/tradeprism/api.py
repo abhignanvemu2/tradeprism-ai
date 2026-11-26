@@ -140,6 +140,11 @@ def forecast_history(offset:int=Query(0,ge=0),limit:int=Query(25,ge=1,le=200),sy
     try:return history(offset,limit,symbol,date_from,date_to,position,timeframe)
     except ValueError as e:raise HTTPException(422,str(e))
 
+@app.get('/market-calendar')
+def market_calendar(owner=Depends(auth)):
+    from .market_calendar import market_today
+    return market_today()
+
 @app.get('/analytics')
 def analytics(date_from:date|None=None,date_to:date|None=None,symbol:str|None=None,
     position:str|None=Query(None,pattern='^(LONG|SHORT)$'),timeframe:str|None=Query(None,pattern='^(5m|15m)$'),

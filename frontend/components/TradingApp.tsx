@@ -3,7 +3,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import dynamic from 'next/dynamic';
 import AnalysisPage from './AnalysisPage';
 import ResearchDashboard from './ResearchDashboard';
-import {useRouter} from 'next/navigation';
+import {useRouter,useSearchParams} from 'next/navigation';
 import ForecastTable from './ForecastTable';
 import DailySummary from './DailySummary';
 import StockPicker from './StockPicker';
@@ -16,11 +16,12 @@ const number=(v:unknown,d=2)=>typeof v==='number'?v.toLocaleString('en-IN',{maxi
 let memoryKey='';
 export default function TradingApp({initialSymbol,initialView}:{initialSymbol?:string;initialView?:string}){
  const router=useRouter();
+ const searchParams=useSearchParams();
  const [menu,setMenu]=useState(false);
  const menuButton=useRef<HTMLButtonElement>(null),sidebar=useRef<HTMLElement>(null);
  function openStock(s:string,t='15m'){router.push('/stocks/'+encodeURIComponent(s)+'?tf='+t);setMenu(false);}
- function navigate(t:string){setMenu(false);if(t==='Analysis'){router.push('/analysis');return;}if(initialSymbol||initialView)router.push('/?view='+encodeURIComponent(t));else setTab(t);}
- useEffect(()=>{const q=new URLSearchParams(window.location.search);if(!initialSymbol&&q.get('view'))setTab(q.get('view')!);if(['5m','15m'].includes(q.get('tf')||''))setTf(q.get('tf')!);},[initialSymbol]);
+ function navigate(t:string){setMenu(false);if(initialSymbol||initialView)router.push('/?view='+encodeURIComponent(t));else setTab(t);}
+ useEffect(()=>{const q=searchParams;if(!initialSymbol&&q.get('view'))setTab(q.get('view')!);if(['5m','15m'].includes(q.get('tf')||''))setTf(q.get('tf')!);},[initialSymbol,searchParams]);
  useEffect(()=>{if(!menu)return;const prev=document.body.style.overflow;document.body.style.overflow='hidden';sidebar.current?.querySelector<HTMLButtonElement>('button')?.focus();function handle(e:KeyboardEvent){if(e.key==='Escape'){setMenu(false);menuButton.current?.focus();}if(e.key==='Tab'){const list=sidebar.current?.querySelectorAll<HTMLButtonElement>('button');if(!list?.length)return;const first=list[0],last=list[list.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}}document.addEventListener('keydown',handle);return()=>{document.body.style.overflow=prev;document.removeEventListener('keydown',handle);};},[menu]);
  const [key,setKey]=useState(memoryKey),[inputKey,setInputKey]=useState(''),[loginError,setLoginError]=useState(''),[instruments,setInstruments]=useState<(Any & {symbol:string})[]>([]),[symbol,setSymbol]=useState(initialSymbol||'AXISBANK'),[tf,setTf]=useState('15m');
  const [tab,setTab]=useState(initialView||(initialSymbol?'Workspace':'Dashboard')),[theme,setTheme]=useState(false),[data,setData]=useState<Any|null>(null),[jobs,setJobs]=useState<Any[]>([]),[reports,setReports]=useState<Any[]>([]),[journal,setJournal]=useState<Any[]>([]),[alerts,setAlerts]=useState<Any[]>([]),[events,setEvents]=useState<Any[]>([]);
@@ -69,7 +70,7 @@ export default function TradingApp({initialSymbol,initialView}:{initialSymbol?:s
  <aside ref={sidebar} className={'sidebar'+(menu?' is-open':'')} id="main-navigation"><div className="sidebar-brand"><div className="brand-icon">T</div><div className="wordmark">TradePrism<small>RESEARCH TERMINAL</small></div><button className="close-nav" aria-label="Close navigation" onClick={()=>{setMenu(false);menuButton.current?.focus();}}>×</button></div><div className="workspace-label">WORKSPACE</div><nav aria-label="Main navigation">{['Dashboard','Analysis','Workspace','Favorites','Journal','Models','Background','Connections'].map((t,i)=><button key={t} aria-current={tab===t?'page':undefined} className={tab===t?'selected':''} onClick={()=>navigate(t)}><span aria-hidden="true">{['▦','◴','⌁','☆','▤','◇','↻','⚙'][i]}</span>{t}</button>)}</nav><div className="sidebar-bottom"><div className="scope-label">100 stocks · NSE<br/>5m & 15m research</div><button onClick={()=>setTheme(!theme)}>{theme?'Dark appearance':'Light appearance'}</button><button onClick={()=>{memoryKey='';setKey('');setData(null);setMenu(false);}}>Lock workspace</button></div></aside>
  <div className="main"><header><div><span className="eyebrow">TRADEPRISM / {initialSymbol?'STOCK DETAIL':tab.toUpperCase()}</span><h1>{tab==='Analysis'?'Trade analysis':tab==='Dashboard'?'Market overview':tab==='Workspace'?(initialSymbol||'Chart workspace'):tab==='Favorites'?'Your watchlist':tab==='Journal'?'Manual paper journal':tab==='Models'?'Model performance':tab==='Background'?'Background activity':'Connections'}</h1></div><div className="header-actions"><span className={'feed-state '+(monitor?.feed?.state==='connected'?'connected':'')}>Feed: {monitor?.feed?.state||'Checking'}</span><span className="badge">5m / 15m</span></div></header>
  {error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>×</button></div>}{notice&&<div className="notice" role="status">{notice}</div>}
- {tab==='Workspace'&&<button onClick={()=>router.push('/analysis?symbol='+encodeURIComponent(symbol))}>View {symbol} analysis charts →</button>}
+ {tab==='Workspace'&&<button onClick={()=>router.push('/?view=Analysis&symbol='+encodeURIComponent(symbol))}>View {symbol} analysis charts →</button>}
  {tab==='Workspace'&&<section className="stock-heading"><div><h2>{instrument?.name||symbol}</h2><p>{instrument?.venue||'NSE'} · {instrument?.provider_symbol||symbol} · {instrument?.sector}</p></div><div><strong>₹{number(quote?.price)}</strong><p>{quote?.state||'Price unavailable'} · {date(quote?.trade_time)}</p></div><button aria-pressed={favorites.includes(symbol)} disabled={!favoritesReady||favoritePending!==null} onClick={()=>toggleFavorite(symbol)}>{favorites.includes(symbol)?'★ Favorited':'☆ Favorite'}</button></section>}
  {tab==='Analysis'&&<AnalysisPage api={api} instruments={instruments}/>}
  {tab==='Dashboard'&&<ResearchDashboard api={api} open={openStock}/>}
